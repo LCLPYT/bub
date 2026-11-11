@@ -82,3 +82,6 @@ After modifying the file, install the config and restart tinyproxy:
 ./install
 systemctl --user restart bub-tinyproxy
 ```
+
+## Acknowledgement
+This setup was based on [A detailed writeup of Claude Code constrained by Bubblewrap.](https://patrickmccanna.net/a-detailed-writeup-of-claude-code-constrained-by-bubblewrap/) by Patrick McCanna.
