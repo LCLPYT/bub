@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+install -Dm644 -t "$HOME/.config/containers/systemd" systemd/bub-tinyproxy.container
+install -Dm644 -t "$HOME/.config/systemd/user" systemd/bub-proxy.socket systemd/bub-proxy.service
+install -Dm644 -t "$HOME/.config/tinyproxy" tinyproxy/tinyproxy.conf tinyproxy/allow
+
+podman pull docker.io/kalaksi/tinyproxy:latest
+
+systemctl --user daemon-reload

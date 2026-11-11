@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+  echo "No program specified. Usage: $0 <program> [...args]"
+  exit 1
+fi
+
+# make sure the socket unit is active, so that the container and podman socketd are started automatically upon connecting from within the sandbox
+systemctl --user start bub-proxy.socket
+
+PROXY_SOCK="$XDG_RUNTIME_DIR/bub-proxy.sock"
+
+bwrap \
+  --ro-bind /usr /usr \
+  --ro-bind /lib /lib \
+  --ro-bind /lib64 /lib64 \
+  --ro-bind /bin /bin \
+  --ro-bind /etc/resolv.conf /etc/resolv.conf \
+  --ro-bind /etc/hosts /etc/hosts \
+  --ro-bind /etc/ssl /etc/ssl \
+  --ro-bind /etc/passwd /etc/passwd \
+  --ro-bind /etc/group /etc/group \
+  --tmpfs /tmp \
+  --bind "$HOME/.claude" "$HOME/.claude" \
+  --bind "$HOME/.claude.json" "$HOME/.claude.json" \
+  --bind "$PWD" "$PWD" \
+  --proc /proc \
+  --dev /dev \
+  --setenv HOME "$HOME" \
+  --setenv USER "$USER" \
+  --unshare-all \
+  --ro-bind "$PROXY_SOCK" /run/proxy.sock \
+  --setenv HTTPS_PROXY http://127.0.0.1:3128 \
+  --setenv HTTP_PROXY http://127.0.0.1:3128 \
+  --setenv NO_PROXY localhost,127.0.0.1 \
+  --setenv https_proxy http://127.0.0.1:3128 \
+  --setenv http_proxy http://127.0.0.1:3128 \
+  --setenv no_proxy localhost,127.0.0.1 \
+  --die-with-parent \
+  --chdir "$PWD" \
+  -- /bin/sh -c '
+    socat TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/proxy.sock &
+    while ! socat -u OPEN:/dev/null TCP:127.0.0.1:3128 2>/dev/null; do sleep 0.05; done
+    exec "$@"
+  ' sh "$@"
+

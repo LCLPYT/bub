@@ -1,0 +1,27 @@
+[Unit]
+Description=Tinyproxy egress allowlist for bubblewrap sandboxes
+StopWhenUnneeded=yes
+
+[Container]
+Image=docker.io/kalaksi/tinyproxy:latest
+ContainerName=tinyproxy
+DropCapability=ALL
+NoNewPrivileges=true
+ReadOnly=true
+PublishPort=127.0.0.1:8888:8888
+Volume=%h/.config/tinyproxy/tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro,Z
+Volume=%h/.config/tinyproxy/allow:/etc/tinyproxy/allow:ro,Z
+
+HealthCmd=curl -fsI -H Host:tinyproxy.stats http://localhost:8888
+HealthInterval=5m
+HealthTimeout=10s
+HealthRetries=1
+HealthStartupCmd=curl -fsI -H Host:tinyproxy.stats http://localhost:8888
+HealthStartupInterval=1s
+HealthStartupRetries=30
+HealthStartupSuccess=1
+Notify=healthy
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=60

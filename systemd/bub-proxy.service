@@ -1,0 +1,7 @@
+[Unit]
+Description=Forward bub-proxy.sock to bub-tinyproxy.service
+Requires=bub-tinyproxy.service bub-proxy.socket
+After=bub-tinyproxy.service bub-proxy.socket
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=10min 127.0.0.1:8888

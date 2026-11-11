@@ -1,0 +1,9 @@
+[Unit]
+Description=Socket for bubblewrap egress proxy
+
+[Socket]
+ListenStream=%t/bub-proxy.sock
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target
