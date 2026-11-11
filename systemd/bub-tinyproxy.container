@@ -2,6 +2,9 @@
 Description=Tinyproxy egress allowlist for bubblewrap sandboxes
 StopWhenUnneeded=yes
 
+[Quadlet]
+DefaultDependencies=false
+
 [Container]
 Image=docker.io/kalaksi/tinyproxy:latest
 ContainerName=tinyproxy
