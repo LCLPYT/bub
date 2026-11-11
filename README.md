@@ -10,7 +10,7 @@ This repo provides a small wrapper using namespaces and a [tinyproxy](https://gi
 
 ## Features
 - user namespace with isolated filesystem and network
-- http proxy with explicit allow list (see `tinyproxy/allow`)
+- http proxy with explicit allow list (see [`tinyproxy/allow`](./tinyproxy/allow))
 - bind-mount the current working directory and some system dirs to the namespace
 - arbitrary process isolation, e.g. for `claude`
 - access to only explicitly allowed files
