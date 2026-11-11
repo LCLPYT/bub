@@ -7,7 +7,7 @@ if [ $# -eq 0 ]; then
   exit 1
 fi
 
-# make sure the socket unit is active, so that the container and podman socketd are started automatically upon connecting from within the sandbox
+# make sure the socket unit is active, so that the container is started automatically upon connecting to the socket
 systemctl --user start bub-proxy.socket
 
 PROXY_SOCK="$XDG_RUNTIME_DIR/bub-proxy.sock"
