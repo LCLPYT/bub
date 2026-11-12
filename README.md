@@ -56,17 +56,20 @@ bub bash
 
 ## Functionality of the proxy
 
-The sandbox has its own network namespace, which is why all networking doesn't work default.
-If you want to request a network request, HTTP/s requests are sent over the proxy which decides which requests go through and which don't.
+The sandbox has its own network namespace, which is why all networking doesn't work by default.
+If you want to perform a network request, HTTP/s requests need to be sent over the proxy, which decides which requests can go through.
 
 The proxy is provided by a unix socket, bind-mounted into the sandbox to `/run/proxy.sock` within the sandbox.
 Inside the sandbox, `socat` is used in order to bind the socket to `127.0.0.1:3128`.
 Environment variables `HTTPS_PROXY` etc. then specify what proxy to use for all common tools.
 
 On the host, tinyproxy is running within a rootless container via Podman user quadlet.
-The tinyproxy container is started and stopped on demand, once the socket is requested.
+The tinyproxy container is started and stopped on demand once the socket is requested.
 Systemd triggers `bub-proxy.service` once `bub-proxy.socket` is requested, given that the socket unit is active (done at the beginning of the bub script).
-`bub-proxy.service` then proxies the socket to `tinyproxy`, running on `127.0.0.1:8888`.
+`bub-proxy.service` then proxies the socket to `tinyproxy` running on `127.0.0.1:8888` using `systemd-socket-proxyd`.
+
+That means the tinyproxy container is started only once the socket is requested.
+Since the container unit specifies `StopWhenUnneeded=yes` and `systemd-socket-proxyd` has a timeout of 10 minutes, the container will also be stopped after 10 minutes of inactivity.
 
 ## Network requests fail / result in forbidden / take a long time
 You can check if the request was caught by `tinyproxy` using the journal:
