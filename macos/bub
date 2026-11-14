@@ -27,6 +27,13 @@ validate() {
       die "refusing to mount '$WORKDIR' into the sandbox for security reasons" ;;
   esac
 
+  # The project is mounted at its host path (so Claude Code keys memory/settings per project),
+  # make sure that doesn't shadow anything inside the container.
+  case "$WORKDIR" in
+    /bin* | /boot* | /dev* | /etc* | /home* | /lib* | /opt* | /proc* | /root* | /run* | /sbin* | /sys* | /tmp | /usr* | /var*)
+      die "'$WORKDIR' would shadow a system directory inside the sandbox" ;;
+  esac
+
   # --mount takes comma-separated key=value pairs, ensure no comma in the path
   [[ "$WORKDIR" != *,* ]] || die "path contains a comma, which --mount can't express: $WORKDIR"
 }
@@ -71,7 +78,8 @@ run_args=(
   --memory "${BUB_MEMORY:-4G}"
   --env "TERM=${TERM:-xterm-256color}"
   --env "COLORTERM=${COLORTERM:-truecolor}"
-  --mount "type=bind,source=$WORKDIR,target=/workspace"
+  --mount "type=bind,source=$WORKDIR,target=$WORKDIR"
+  --workdir "$WORKDIR"
   --mount "type=bind,source=$CLAUDE_STATE,target=$CONTAINER_HOME/.claude-sandbox"
 )
 

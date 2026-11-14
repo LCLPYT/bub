@@ -27,15 +27,14 @@ RUN apt update \
 RUN if ! getent group "${HOST_GID}" >/dev/null; then \
     groupadd -g "${HOST_GID}" "${USERNAME}"; \
   fi \
-  && useradd -m -u "${HOST_UID}" -g "${HOST_GID}" -s /bin/bash "${USERNAME}" \
-  && mkdir -p /workspace \
-  && chown "${HOST_UID}:${HOST_GID}" /workspace
+  && useradd -m -u "${HOST_UID}" -g "${HOST_GID}" -s /bin/bash "${USERNAME}"
 
 USER ${USERNAME}
 
-# Configure git to trust the workspace directory
-# (needed because it's a bind mount with potentially different ownership)
-RUN git config --global --add safe.directory /workspace
+# Configure git to trust the project directory
+# (needed because it's a bind mount with potentially different ownership;
+# the project is mounted at its host path, so that path varies)
+RUN git config --global --add safe.directory '*'
 
 ENV PATH=/home/${USERNAME}/.local/bin:${PATH}
 
@@ -45,5 +44,4 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/home/${USERNAME}/.claude-sandbox
 
-WORKDIR /workspace
 
