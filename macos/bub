@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+IMAGE_NAME="bub-sandbox"
+CONTAINER_NAME="bub-session-$$"  # Unique name per invocation
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONTAINERFILE="$SCRIPT_DIR/Containerfile"
+
+STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/bub-sandbox"
+CLAUDE_STATE="$STATE_DIR/claude"      # sandbox-only Claude config + credentials
+STAMP="$STATE_DIR/image.stamp"        # time of the last successful image build
+
+WORKDIR="$(pwd -P)"
+CONTAINER_HOME="/home/user"
+
+log() { printf '[bub] %s\n' "$*" >&2; }
+die() { log "error: $*"; exit 1; }
+
+validate() {
+  command -v container >/dev/null 2>&1 || die "Apple 'container' CLI not found"
+  [[ -f "$CONTAINERFILE" ]] || die "missing $CONTAINERFILE"
+
+  # Don't share overly broad directories by accident.
+  case "$WORKDIR" in
+    / | "$HOME" | /Users | "$HOME/Library"* | "$HOME/.ssh"* | "$HOME/.config"* | "$HOME/.claude"* | "$STATE_DIR"*)
+      die "refusing to mount '$WORKDIR' into the sandbox for security reasons" ;;
+  esac
+
+  # --mount takes comma-separated key=value pairs, ensure no comma in the path
+  [[ "$WORKDIR" != *,* ]] || die "path contains a comma, which --mount can't express: $WORKDIR"
+}
+
+image_exists() {
+  container image inspect "$IMAGE_NAME" >/dev/null 2>&1
+}
+
+needs_build() {
+  [[ "${BUB_REBUILD:-0}" == 1 ]] && return 0
+  image_exists || return 0
+  [[ -f "$STAMP" ]] || return 0
+  [[ "$CONTAINERFILE" -nt "$STAMP" ]] && return 0
+  return 1
+}
+
+validate
+
+mkdir -p "$CLAUDE_STATE"
+chmod 700 "$STATE_DIR" "$CLAUDE_STATE"
+
+if needs_build; then
+  log "building image '$IMAGE_NAME'..."
+  build_args=(
+    --tag "$IMAGE_NAME"
+    --file "$CONTAINERFILE"
+    --build-arg "HOST_UID=$(id -u)"
+    --build-arg "HOST_GID=$(id -g)"
+  )
+  [[ "${BUB_REBUILD:-0}" == 1 ]] && build_args+=(--no-cache)
+  container build "${build_args[@]}" "$SCRIPT_DIR"
+  touch "$STAMP"
+  log "image built"
+fi
+
+run_args=(
+  --rm
+  --name "$CONTAINER_NAME"
+  --interactive
+  --arch arm64
+  --cpus "${BUB_CPUS:-4}"
+  --memory "${BUB_MEMORY:-4G}"
+  --env "TERM=${TERM:-xterm-256color}"
+  --env "COLORTERM=${COLORTERM:-truecolor}"
+  --mount "type=bind,source=$WORKDIR,target=/workspace"
+  --mount "type=bind,source=$CLAUDE_STATE,target=$CONTAINER_HOME/.claude-sandbox"
+)
+
+# tty only if interactive
+if [[ -t 0 && -t 1 ]]; then
+  run_args+=(--tty)
+fi
+
+exec container run "${run_args[@]}" "$IMAGE_NAME" "$@"
+

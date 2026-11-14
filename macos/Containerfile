@@ -1,0 +1,49 @@
+FROM debian:trixie-slim
+
+ARG HOST_UID=501
+ARG HOST_GID=20
+ARG USERNAME=user
+
+ARG CLAUDE_VERSION=stable
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+RUN apt update \
+  && apt install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    openssh-client \
+    build-essential \
+    python3 \
+    jq \
+    less \
+    procps \
+    ripgrep \
+    curl \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN if ! getent group "${HOST_GID}" >/dev/null; then \
+    groupadd -g "${HOST_GID}" "${USERNAME}"; \
+  fi \
+  && useradd -m -u "${HOST_UID}" -g "${HOST_GID}" -s /bin/bash "${USERNAME}" \
+  && mkdir -p /workspace \
+  && chown "${HOST_UID}:${HOST_GID}" /workspace
+
+USER ${USERNAME}
+
+# Configure git to trust the workspace directory
+# (needed because it's a bind mount with potentially different ownership)
+RUN git config --global --add safe.directory /workspace
+
+ENV PATH=/home/${USERNAME}/.local/bin:${PATH}
+
+# install claude code
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
+
+ENV DISABLE_AUTOUPDATER=1 \
+    CLAUDE_CONFIG_DIR=/home/${USERNAME}/.claude-sandbox
+
+WORKDIR /workspace
+
