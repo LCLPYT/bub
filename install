@@ -2,11 +2,28 @@
 
 set -euo pipefail
 
-install -Dm644 -t "$HOME/.config/containers/systemd" systemd/bub-tinyproxy.container
-install -Dm644 -t "$HOME/.config/systemd/user" systemd/bub-proxy.socket systemd/bub-proxy.service
-install -Dm644 -t "$HOME/.config/bub-tinyproxy" tinyproxy/tinyproxy.conf tinyproxy/allow
-install -Dm755 -t "$HOME/.local/bin" bub
+install_linux() {
+  install -Dm644 -t "$HOME/.config/containers/systemd" systemd/bub-tinyproxy.container
+  install -Dm644 -t "$HOME/.config/systemd/user" systemd/bub-proxy.socket systemd/bub-proxy.service
+  install -Dm644 -t "$HOME/.config/bub-tinyproxy" tinyproxy/tinyproxy.conf tinyproxy/allow
+  install -Dm755 -t "$HOME/.local/bin" bub
 
-podman pull docker.io/kalaksi/tinyproxy:latest
+  podman pull docker.io/kalaksi/tinyproxy:latest
 
-systemctl --user daemon-reload
+  systemctl --user daemon-reload
+}
+
+install_macos() {
+  local data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bub-sandbox"
+  mkdir -p "$data_dir"
+  install -m644 macos/Containerfile "$data_dir"
+
+  mkdir -p "$HOME"/.local/bin
+  install -m755 macos/bub "$HOME"/.local/bin
+}
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  install_macos
+else
+  install_linux
+fi

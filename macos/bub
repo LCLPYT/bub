@@ -4,8 +4,8 @@ set -euo pipefail
 
 IMAGE_NAME="bub-sandbox"
 CONTAINER_NAME="bub-session-$$"  # Unique name per invocation
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONTAINERFILE="$SCRIPT_DIR/Containerfile"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bub-sandbox"
+CONTAINERFILE="$DATA_DIR/Containerfile"
 
 STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/bub-sandbox"
 CLAUDE_STATE="$STATE_DIR/claude"      # sandbox-only Claude config + credentials
@@ -64,7 +64,7 @@ if needs_build; then
     --build-arg "HOST_GID=$(id -g)"
   )
   [[ "${BUB_REBUILD:-0}" == 1 ]] && build_args+=(--no-cache)
-  container build "${build_args[@]}" "$SCRIPT_DIR"
+  container build "${build_args[@]}" "$DATA_DIR"
   touch "$STAMP"
   log "image built"
 fi
