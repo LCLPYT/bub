@@ -60,17 +60,6 @@ validate() {
   fi
 }
 
-write_gitconfig() {
-  local name email
-  name=$(git config --global user.name 2>/dev/null || true)
-  email=$(git config --global user.email 2>/dev/null || true)
-  {
-    [ -z "$name$email" ] || echo "[user]"
-    [ -z "$name" ] || printf '\tname = %s\n' "$name"
-    [ -z "$email" ] || printf '\temail = %s\n' "$email"
-  } >"$META/gitconfig"
-}
-
 setup_state() {
   mkdir -p "$META"
   chmod 700 "$STATE" "$META"
@@ -78,7 +67,6 @@ setup_state() {
   printf '%s\n' "$WORKDIR" >"$META/workdir"
   [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N '' -C bub-vm -f "$KEY"
   install -m 600 "$KEY.pub" "$META/authorized_keys"
-  write_gitconfig
 }
 
 collect_shares() {

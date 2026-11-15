@@ -70,6 +70,7 @@ in
     };
 
     homeShares = lib.mkOption {
+      default = { };
       description = "Host directories mounted into the home directory of the VM user.";
       type = lib.types.attrsOf (
         lib.types.submodule (
@@ -98,7 +99,6 @@ in
     packages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = with pkgs; [
-        claude-code
         curl
         fd
         file
@@ -119,13 +119,6 @@ in
   config = {
     system.stateVersion = "26.05";
     networking.hostName = "bub";
-
-    nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
-
-    bub.homeShares.claude = lib.mkDefault {
-      source = "~/.local/share/bub-vm/claude";
-      target = ".claude";
-    };
 
     microvm = {
       hypervisor = if isDarwinHost then "vfkit" else "qemu";
@@ -270,21 +263,8 @@ in
       defaultNetwork.settings.dns_enabled = true;
     };
 
-    programs.git = {
-      enable = true;
-      config.include.path = "/run/bub/meta/gitconfig";
-    };
-
     environment.enableAllTerminfo = true;
     environment.systemPackages = cfg.packages ++ [ bubSession ];
-    environment.variables = {
-      DISABLE_AUTOUPDATER = "1";
-      DISABLE_TELEMETRY = "1";
-      DISABLE_ERROR_REPORTING = "1";
-    }
-    // lib.optionalAttrs (cfg.homeShares ? claude) {
-      CLAUDE_CONFIG_DIR = "${home}/${cfg.homeShares.claude.target}";
-    };
     environment.extraInit = ''
       if [ -n "''${XDG_RUNTIME_DIR:-}" ]; then
         export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"

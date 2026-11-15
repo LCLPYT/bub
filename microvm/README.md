@@ -56,10 +56,9 @@ home.packages = [
         bub.uid = 1001;
 
         # customize packages installed in the vm
-        bub.packages = with pkgs; [ 
-          claude-code 
-          git 
-          nodejs 
+        bub.packages = with pkgs; [
+          git
+          nodejs
         ];
 
         # customize ram
@@ -70,10 +69,43 @@ home.packages = [
 ];
 ```
 
+### Example: Claude Code
+
+Claude Code is not included by default. To add it, install the package and share its config directory with the VM,
+so that the login and settings persist across VMs:
+
+```nix
+(inputs.bub-vm.lib.mkBub {
+  system = pkgs.stdenv.hostPlatform.system;
+  modules = [
+    ({ config, lib, options, pkgs, ... }: {
+      nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
+
+      bub.packages = options.bub.packages.default ++ [ pkgs.claude-code ];
+
+      # mounts ~/.local/share/bub-vm/claude on the host at ~/.claude in the vm
+      bub.homeShares.claude = {
+        source = "~/.local/share/bub-vm/claude";
+        target = ".claude";
+      };
+
+      environment.variables = {
+        CLAUDE_CONFIG_DIR = "/home/${config.bub.user}/.claude";
+        DISABLE_AUTOUPDATER = "1";
+        DISABLE_TELEMETRY = "1";
+        DISABLE_ERROR_REPORTING = "1";
+      };
+    })
+  ];
+})
+```
+
+Home shares are created on the host if they don't exist yet.
+
 ## Usage
 
 ```bash
-bub-vm claude        # run a program
+bub-vm make test     # run a program
 bub-vm               # interactive shell
 bub-vm --stop        # stop the VM of this directory
 bub-vm --destroy     # delete the VM disk of this directory
@@ -113,8 +145,8 @@ Using virtiofs is crucial for this setup, so the following hypervisors are chose
 - microvm.nix bakes share paths into the runner at build time. Project-specific devices (project dir, the `meta`
   dir, home shares, NIC, vsock) are added at runtime through `microvm.extraArgsScript`.
 - On Linux, `bub-vm` starts one unprivileged `virtiofsd` per share. vfkit has virtio-fs built in.
-- The guest mounts the `meta` share at `/run/bub/meta`. It contains the project path, the SSH public key, the
-  devShell environment and your git `user.name`/`user.email`. `bub-workdir.service` mounts the project at its
+- The guest mounts the `meta` share at `/run/bub/meta`. It contains the project path, the SSH public key and the
+  devShell environment. `bub-workdir.service` mounts the project at its
   host path.
 - SSH (for a proper TTY with resizing) runs over vsock: `socat VSOCK-CONNECT` on Linux, the vfkit vsock unix socket on macOS. 
   sshd in the guest is socket-activated on `vsock::22`, and the key pair is generated per project.
