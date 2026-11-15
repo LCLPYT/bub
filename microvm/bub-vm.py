@@ -17,15 +17,16 @@ Usage: bub-vm [program [args...]]  run a program (default: bash) in the VM of th
        bub-vm --destroy            stop the VM and delete its disk and state
        bub-vm --log                print the console log of the VM
 
-Environment:
-  BUB_DEVSHELL=0       don't load the devShell of the project flake
-  BUB_KEEP_RUNNING=1   keep the VM running after the last session ends
+Environment (overrides bub.devShell.enable and bub.keepRunning):
+  BUB_DEVSHELL=0|1       don't load / load the devShell of the project flake
+  BUB_KEEP_RUNNING=0|1   stop / keep the VM running after the last session ends
 """
 
 NIX = [
     "nix",
     "--extra-experimental-features", "nix-command flakes",
     "--option", "allow-import-from-derivation", "false",
+    "--option", "accept-flake-config", "false",
 ]
 SESSION = "/run/current-system/sw/bin/bub-session"
 POWEROFF = "/run/wrappers/bin/sudo /run/current-system/sw/bin/systemctl poweroff"
@@ -65,6 +66,11 @@ def matches(path, patterns):
 def check_path(what, path):
     if UNSAFE_CHARS.search(path):
         die(f"{what} contains characters that can't be passed to the hypervisor: {path}")
+
+
+def env_flag(name, default):
+    value = os.environ.get(name, "")
+    return default if value == "" else value == "1"
 
 
 def wait_until(predicate, attempts, delay):
@@ -169,7 +175,7 @@ class Vm:
         authorized_keys.chmod(0o600)
 
     def collect_shares(self):
-        shares = [("work", self.workdir), ("meta", str(self.meta))]
+        shares = [("work", self.workdir, False), ("meta", str(self.meta), True)]
 
         for share in self.config["homeShares"]:
             tag, source = share["tag"], share["source"]
@@ -179,7 +185,7 @@ class Vm:
             os.makedirs(source, exist_ok=True)
             source = os.path.realpath(source)
             check_path(f"share {tag}", source)
-            shares.append((tag, source))
+            shares.append((tag, source, share["readOnly"]))
 
         return shares
 
@@ -231,7 +237,7 @@ class Vm:
             devenv.unlink(missing_ok=True)
 
     def build_devshell(self, devenv):
-        if os.environ.get("BUB_DEVSHELL", "1") != "1" or not (Path(self.workdir) / "flake.nix").is_file():
+        if not env_flag("BUB_DEVSHELL", self.config["devShell"]) or not (Path(self.workdir) / "flake.nix").is_file():
             return False
 
         if shutil.which("nix") is None:
@@ -311,14 +317,15 @@ class Vm:
     def qemu_args(self, shares):
         self.start_virtiofsd("ro-store", "/nix/store", readonly=True)
         sockets = [self.state / "virtiofs-ro-store.sock"]
-        args = [
-            "-netdev", "user,id=bubnet",
-            "-device", f"virtio-net-pci,netdev=bubnet,mac={self.mac}",
-            "-device", f"vhost-vsock-pci,guest-cid={self.cid}",
-        ]
+        args = ["-device", f"vhost-vsock-pci,guest-cid={self.cid}"]
+        if self.config["network"]:
+            args += [
+                "-netdev", "user,id=bubnet",
+                "-device", f"virtio-net-pci,netdev=bubnet,mac={self.mac}",
+            ]
 
-        for tag, source in shares:
-            self.start_virtiofsd(tag, source, readonly=tag == "meta")
+        for tag, source, readonly in shares:
+            self.start_virtiofsd(tag, source, readonly)
             sockets.append(self.state / f"virtiofs-{tag}.sock")
             args += [
                 "-chardev", f"socket,id=bub-{tag},path=virtiofs-{tag}.sock",
@@ -330,11 +337,10 @@ class Vm:
         return args
 
     def vfkit_args(self, shares):
-        args = [
-            "--device", f"virtio-net,nat,mac={self.mac}",
-            "--device", f"virtio-vsock,port=22,socketURL={self.state}/ssh.sock,connect",
-        ]
-        for tag, source in shares:
+        args = ["--device", f"virtio-vsock,port=22,socketURL={self.state}/ssh.sock,connect"]
+        if self.config["network"]:
+            args += ["--device", f"virtio-net,nat,mac={self.mac}"]
+        for tag, source, _readonly in shares:
             args += ["--device", f"virtio-fs,sharedDir={source},mountTag={tag}"]
         return args
 
@@ -438,8 +444,12 @@ class Vm:
             remote += " " + shlex.join(command)
         tty = "-t" if sys.stdin.isatty() and sys.stdout.isatty() else "-T"
 
+        options = [tty]
+        if self.config["forwardEnv"]:
+            options += ["-o", f"SendEnv={' '.join(self.config['forwardEnv'])}"]
+
         process = subprocess.Popen(
-            self.ssh_command(tty, "-o", f"SetEnv=COLORTERM={os.environ.get('COLORTERM', '')}", "bub-vm", remote),
+            self.ssh_command(*options, "bub-vm", remote),
             env=self.ssh_env(),
         )
 
@@ -464,7 +474,7 @@ def exit_on_signal(signum, _frame):
 def finish(vm, start_lock, sessions_lock):
     """Stops the VM if this was the last session, i.e. no other session holds a shared lock."""
     fcntl.flock(sessions_lock, fcntl.LOCK_UN)
-    if os.environ.get("BUB_KEEP_RUNNING", "0") == "1":
+    if env_flag("BUB_KEEP_RUNNING", vm.config["keepRunning"]):
         return
 
     fcntl.flock(start_lock, fcntl.LOCK_EX)

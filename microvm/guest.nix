@@ -85,6 +85,14 @@ in
                 type = lib.types.str;
                 description = "Mount point relative to the home directory of the VM user.";
               };
+              readOnly = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = ''
+                  Share the directory read-only. On Linux hosts this is enforced by virtiofsd. vfkit has no read-only
+                  shares, so on macOS hosts it is only a read-only mount in the guest, which root can remount.
+                '';
+              };
               tag = lib.mkOption {
                 type = lib.types.str;
                 default = "h-${name}";
@@ -96,29 +104,44 @@ in
       );
     };
 
-    packages = lib.mkOption {
-      type = lib.types.listOf lib.types.package;
-      default = with pkgs; [
-        curl
-        fd
-        file
-        git
-        gnumake
-        jq
-        less
-        procps
-        python3
-        ripgrep
-        unzip
-        wget
+    network.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Give the VM a NAT network interface with access to the host network and the internet.";
+    };
+
+    sudo.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Give the VM user passwordless sudo. Without it, the user may only run `systemctl poweroff` as root.";
+    };
+
+    keepRunning = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Keep the VM running after the last session ends. Overridden by `BUB_KEEP_RUNNING`.";
+    };
+
+    devShell.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Load the devShell of the project flake. Overridden by `BUB_DEVSHELL`.";
+    };
+
+    forwardEnv = lib.mkOption {
+      type = lib.types.listOf (lib.types.strMatching "[A-Za-z_][A-Za-z0-9_]*");
+      default = [ "COLORTERM" ];
+      example = [
+        "COLORTERM"
+        "LANG"
       ];
-      description = "Packages available inside the VM.";
+      description = "Environment variables passed from the host to the VM sessions, if they are set.";
     };
   };
 
   config = {
-    system.stateVersion = "26.05";
-    networking.hostName = "bub";
+    system.stateVersion = lib.mkDefault "26.05";
+    networking.hostName = lib.mkDefault "bub";
 
     microvm = {
       hypervisor = if isDarwinHost then "vfkit" else "qemu";
@@ -126,7 +149,7 @@ in
       vcpu = lib.mkDefault 4;
       mem = lib.mkDefault 4096;
       socket = null;
-      machineId = "6f1c4b7e-2d1a-4c55-9a3e-8b0d2f7e4a10";
+      machineId = lib.mkDefault "6f1c4b7e-2d1a-4c55-9a3e-8b0d2f7e4a10";
 
       shares = [
         {
@@ -161,7 +184,7 @@ in
 
     networking.useNetworkd = true;
     networking.firewall.enable = true;
-    systemd.network.networks."10-uplink" = {
+    systemd.network.networks."10-uplink" = lib.mkIf cfg.network.enable {
       matchConfig.Type = "ether";
       networkConfig.DHCP = "yes";
     };
@@ -177,7 +200,8 @@ in
       group = "users";
       createHome = true;
       useDefaultShell = true;
-      extraGroups = [ "wheel" ];
+      extraGroups = lib.optional cfg.sudo.enable "wheel";
+      # For rootless containers. NixOS only allocates these automatically for normal users.
       subUidRanges = [
         {
           startUid = 100000;
@@ -192,6 +216,17 @@ in
       ];
     };
     security.sudo.wheelNeedsPassword = false;
+    security.sudo.extraRules = [
+      {
+        users = [ cfg.user ];
+        commands = [
+          {
+            command = "/run/current-system/sw/bin/systemctl poweroff";
+            options = [ "NOPASSWD" ];
+          }
+        ];
+      }
+    ];
 
     services.openssh = {
       enable = true;
@@ -206,7 +241,7 @@ in
         AllowStreamLocalForwarding = false;
         AllowTcpForwarding = "local";
         X11Forwarding = false;
-        AcceptEnv = [ "COLORTERM" ];
+        AcceptEnv = cfg.forwardEnv;
       };
     };
     systemd.sockets.sshd.socketConfig.ListenStream = lib.mkForce [ "vsock::22" ];
@@ -223,6 +258,7 @@ in
       lib.nameValuePair "${home}/${share.target}" {
         device = share.tag;
         fsType = "virtiofs";
+        options = lib.optional share.readOnly "ro";
       }
     ) cfg.homeShares;
 
@@ -256,19 +292,21 @@ in
       '';
     };
 
-    virtualisation.containers.enable = true;
-    virtualisation.podman = {
-      enable = true;
-      dockerCompat = true;
-      defaultNetwork.settings.dns_enabled = true;
-    };
-
     environment.enableAllTerminfo = true;
-    environment.systemPackages = cfg.packages ++ [ bubSession ];
-    environment.extraInit = ''
-      if [ -n "''${XDG_RUNTIME_DIR:-}" ]; then
-        export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
-      fi
-    '';
+    environment.systemPackages = with pkgs; [
+      bubSession
+      curl
+      fd
+      file
+      git
+      gnumake
+      jq
+      less
+      procps
+      python3
+      ripgrep
+      unzip
+      wget
+    ];
   };
 }

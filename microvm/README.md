@@ -56,9 +56,8 @@ home.packages = [
         # custom user id within the vm
         bub.uid = 1001;
 
-        # customize packages installed in the vm
-        bub.packages = with pkgs; [
-          git
+        # additional packages installed in the vm
+        environment.systemPackages = with pkgs; [
           nodejs
         ];
 
@@ -88,8 +87,8 @@ You can write a small flake to customize the vm config and install it as profile
     packages.x86_64-linux.default = bub-vm.lib.mkBub {
       system = "x86_64-linux";
       modules = [
-        ({ options, pkgs, ... }: {
-          bub.packages = options.bub.packages.default ++ with pkgs; [ nodejs ];
+        ({ pkgs, ... }: {
+          environment.systemPackages = [ pkgs.nodejs ];
           microvm.mem = 8192;
         })
       ];
@@ -114,10 +113,10 @@ If you want to use Claude Code in the VM, you can add it as general package in t
 (inputs.bub-vm.lib.mkBub {
   system = pkgs.stdenv.hostPlatform.system;
   modules = [
-    ({ config, lib, options, pkgs, ... }: {
+    ({ config, lib, pkgs, ... }: {
       nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
 
-      bub.packages = options.bub.packages.default ++ [ pkgs.claude-code ];
+      environment.systemPackages = [ pkgs.claude-code ];
 
       # mounts ~/.local/share/bub-vm/claude on the host at ~/.claude in the vm
       bub.homeShares.claude = {
@@ -137,6 +136,45 @@ If you want to use Claude Code in the VM, you can add it as general package in t
 ```
 
 Home shares are created on the host if they don't exist yet.
+Set `readOnly = true` on a share to mount it read-only. On Linux this is enforced by virtiofsd on the host.
+vfkit has no read-only shares, so on macOS it is only a read-only mount inside the guest, which root can undo.
+
+### Example: Podman
+
+Podman is not enabled by default. Rootless Podman works out of the box with:
+
+```nix
+({ ... }: {
+  virtualisation.podman = {
+    enable = true;
+    dockerCompat = true;
+  };
+
+  # optional: point Docker API clients (testcontainers, docker compose, ...) to the user Podman socket
+  environment.extraInit = ''
+    if [ -n "''${XDG_RUNTIME_DIR:-}" ]; then
+      export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+    fi
+  '';
+})
+```
+
+### Options
+
+| Option                | Default                         | Description                                                        |
+|-----------------------|---------------------------------|--------------------------------------------------------------------|
+| `bub.user`            | `bub`                           | Name of the user inside the VM.                                    |
+| `bub.uid`             | `501` on macOS, `1000` on Linux | UID of the VM user. Must match the host user.                      |
+| `bub.diskSize`        | `32768` (MiB)                   | Size of the sparse per-project root disk.                          |
+| `bub.homeShares`      | `{ }`                           | Host directories mounted into the home directory of the user.      |
+| `bub.network.enable`  | `true`                          | NAT network with access to the host network and the internet.      |
+| `bub.sudo.enable`     | `true`                          | Passwordless sudo for the VM user.                                 |
+| `bub.keepRunning`     | `false`                         | Keep the VM running after the last session (`BUB_KEEP_RUNNING`).   |
+| `bub.devShell.enable` | `true`                          | Load the devShell of the project flake (`BUB_DEVSHELL`).           |
+| `bub.forwardEnv`      | `[ "COLORTERM" ]`               | Environment variables passed from the host to sessions.            |
+
+Packages are added with `environment.systemPackages`, and any other NixOS or microvm.nix option (e.g. `microvm.mem`,
+`microvm.vcpu`) can be set as well.
 
 ## Usage
 
@@ -149,7 +187,7 @@ bub-vm --log         # console output
 ```
 
 Each project directory gets its own VM with a persistent, sparse root disk under `~/.local/state/bub-vm/<hash>/`. 
-The VM is started by the first session and stopped after the last one (`BUB_KEEP_RUNNING=1` keeps it running). 
+The VM is started by the first session and stopped after the last one (`bub.keepRunning` or `BUB_KEEP_RUNNING=1` keeps it running). 
 More sessions in the same directory share the running VM.
 
 ## Project tools
@@ -159,8 +197,8 @@ with `nix print-dev-env` and sourced in every session. Its store paths reach the
 
 Because the project directory is writable from inside the VM, its Nix files are untrusted: building them runs code
 on the host (inside the Nix build sandbox on Linux, which is off by default on macOS). bub-vm therefore asks for
-confirmation whenever the `*.nix` files or `flake.lock` change. Import from derivation is disabled. Set
-`BUB_DEVSHELL=0` to skip the devShell.
+confirmation whenever the `*.nix` files or `flake.lock` change. Import from derivation and flake `nixConfig` are
+disabled. Set `bub.devShell.enable = false` or `BUB_DEVSHELL=0` to skip the devShell.
 
 Nix itself is not available inside the VM.
 

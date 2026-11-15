@@ -47,7 +47,11 @@ to `PATH` and sets `BUB_VM_CONFIG` to a JSON file generated from the evaluated g
 | `guestSystem` | Guest system, e.g. `x86_64-linux`                           |
 | `guestUser`   | `bub.user`                                                  |
 | `guestUid`    | `bub.uid`                                                   |
-| `homeShares`  | `bub.homeShares` as a list of `{ tag, source }` objects     |
+| `homeShares`  | `bub.homeShares` as a list of `{ tag, source, readOnly }`   |
+| `network`     | `bub.network.enable`                                        |
+| `keepRunning` | `bub.keepRunning`                                           |
+| `devShell`    | `bub.devShell.enable`                                       |
+| `forwardEnv`  | `bub.forwardEnv`                                            |
 
 Runtime dependencies are git, openssh and socat, plus virtiofsd on Linux hosts. The script only uses the Python
 standard library. The build byte-compiles it, so syntax errors fail the build.
@@ -62,16 +66,22 @@ standard library. The build byte-compiles it, so syntax errors fail the build.
 | `bub.uid`         | `501` on macOS, `1000` on Linux | UID of the VM user. Must match the host user.                  |
 | `bub.diskSize`    | `32768` (MiB)                   | Size of the sparse per-project root disk.                      |
 | `bub.homeShares`  | `{ }`                           | Host directories mounted into the home directory of the user.  |
-| `bub.packages`    | curl, fd, git, jq, ripgrep, ... | Packages available inside the VM.                              |
+| `bub.network.enable` | `true`                       | NAT network interface.                                         |
+| `bub.sudo.enable` | `true`                          | Passwordless sudo for the VM user.                             |
+| `bub.keepRunning` | `false`                         | Default for `BUB_KEEP_RUNNING`.                                |
+| `bub.devShell.enable` | `true`                      | Default for `BUB_DEVSHELL`.                                    |
+| `bub.forwardEnv`  | `[ "COLORTERM" ]`               | Variables sent by ssh (`SendEnv`) and accepted by sshd.        |
 
-Each home share has a `source` (host path, a leading `~` expands to the host home directory) and a `target`
-(relative to the guest home directory). Its virtiofs tag is `h-<name>`.
+Each home share has a `source` (host path, a leading `~` expands to the host home directory), a `target`
+(relative to the guest home directory) and `readOnly` (default `false`). Its virtiofs tag is `h-<name>`.
+
+A base set of packages (curl, fd, git, jq, ripgrep, ...) is added to `environment.systemPackages`.
 
 ### MicroVM configuration
 
 - Hypervisor: `vfkit` on macOS hosts, `qemu` otherwise.
 - 4 vCPUs and 4096 MiB memory by default (`lib.mkDefault`, so modules can override them).
-- No control socket, fixed machine id.
+- No control socket, fixed machine id (`lib.mkDefault`, like `system.stateVersion` and the host name).
 - One static share: the host `/nix/store`, mounted read-only at `/nix/.ro-store`.
 - One volume: `root.img` with label `bub-root`, mounted at `/` with size `bub.diskSize`. The image is created
   relative to the working directory of the runner, which is the per-project state directory.
@@ -86,25 +96,27 @@ Each home share has a `source` (host path, a leading `~` expands to the host hom
 - `vmw_vsock_virtio_transport` is loaded, `systemd.ssh_auto=no` disables the systemd SSH generator and `/tmp` is a
   tmpfs.
 - Nix and documentation are disabled. Nix is not available inside the VM.
-- Networking uses systemd-networkd with DHCP on any ethernet interface. The firewall is enabled.
-- Users are immutable. The VM user has the configured UID, is in `wheel` (passwordless sudo) and has subuid and
-  subgid ranges for rootless Podman. NixOS only allows UIDs >= 1000 for normal users, so UIDs below 1000 (macOS
-  hosts) make it a system user instead.
-- Podman is enabled with Docker compatibility and DNS on the default network. `DOCKER_HOST` points to the user
-  Podman socket when `XDG_RUNTIME_DIR` is set.
+- Networking uses systemd-networkd with DHCP on any ethernet interface (only with `bub.network.enable`). The
+  firewall is enabled.
+- Users are immutable. The VM user has the configured UID and subuid and subgid ranges for rootless containers.
+  NixOS only allows UIDs >= 1000 for normal users, so UIDs below 1000 (macOS hosts) make it a system user instead,
+  which is also why the ranges are set explicitly.
+- With `bub.sudo.enable` the user is in `wheel` (passwordless sudo). A sudo rule always allows
+  `systemctl poweroff`, which bub-vm uses to stop the VM.
+- Podman is not enabled, see the README for an example.
 - All terminfo entries are installed.
 
 ### SSH
 
 sshd is socket activated and listens only on `vsock::22`. The firewall port is not opened. Authentication is by
 public key only, read from `/run/bub/meta/authorized_keys`. Root login, agent forwarding, stream local forwarding
-and X11 forwarding are disabled. TCP forwarding is limited to `local`. `COLORTERM` is accepted from the client.
+and X11 forwarding are disabled. TCP forwarding is limited to `local`. The variables in `bub.forwardEnv` are accepted from the client.
 
 ### Mounts
 
 - `/run/bub/meta`: virtiofs tag `meta`, read-only. Contains `workdir`, `authorized_keys` and optionally
   `devenv.sh`.
-- `~/<target>` for every home share: virtiofs tag `h-<name>`.
+- `~/<target>` for every home share: virtiofs tag `h-<name>`, `ro` if `readOnly` is set.
 - The project directory: mounted by `bub-workdir.service`, see below.
 
 ### bub-workdir.service
@@ -134,8 +146,8 @@ The command executed for every SSH session:
 | `bub-vm --destroy`     | Stop the VM and delete its state directory, asks on a tty.       |
 | `bub-vm --log`         | Print `vm.log` and `serial.log`.                                 |
 
-Environment variables: `BUB_DEVSHELL=0` skips the devShell, `BUB_KEEP_RUNNING=1` keeps the VM running after the
-last session.
+Environment variables: `BUB_DEVSHELL` (`0` or `1`) and `BUB_KEEP_RUNNING` (`0` or `1`) override
+`bub.devShell.enable` and `bub.keepRunning`. Unset or empty means the configured default.
 
 ### Per-project identity
 
@@ -188,7 +200,7 @@ determine:
 
 ### devShell
 
-The devShell is skipped when `BUB_DEVSHELL` is not `1`, the project has no `flake.nix` or `nix` is not installed on
+The devShell is skipped when it is disabled (`bub.devShell.enable`, `BUB_DEVSHELL`), the project has no `flake.nix` or `nix` is not installed on
 the host.
 
 The project directory is writable from inside the VM, so its Nix files are untrusted and evaluating them runs
@@ -198,7 +210,7 @@ but not ignored files in a git repository, otherwise only `flake.nix` and `flake
 
 After approval, `devShells.<guest-system>.bub` is used if it exists, otherwise `.default`. It is built on the host
 with `nix print-dev-env --profile` and written to `meta/devenv.sh`, which `bub-session` sources. Its store paths
-reach the guest through the shared store. All nix calls disable import from derivation.
+reach the guest through the shared store. All nix calls disable import from derivation and `accept-flake-config`.
 
 On any failure the devShell is removed and the session continues without it.
 
@@ -215,14 +227,14 @@ Processes started by other invocations are checked with `kill(pid, 0)`.
 
 QEMU (Linux):
 
-- One `virtiofsd` per share (`--sandbox=none --cache=auto`): `ro-store` for `/nix/store` and `meta` read-only,
-  the others writable. bub-vm waits up to 5 seconds for all sockets to appear.
-- Extra arguments: user mode networking with the project MAC, `vhost-vsock-pci` with the project CID and a
+- One `virtiofsd` per share (`--sandbox=none --cache=auto`): `ro-store` for `/nix/store`, `meta` and read-only
+  home shares with `--readonly`, the others writable. bub-vm waits up to 5 seconds for all sockets to appear.
+- Extra arguments: user mode networking with the project MAC (if `network` is set), `vhost-vsock-pci` with the project CID and a
   `vhost-user-fs-pci` device per share.
 
 vfkit (macOS):
 
-- NAT networking with the project MAC.
+- NAT networking with the project MAC (if `network` is set).
 - A vsock device that connects guest port 22 to the unix socket `ssh.sock`.
 - A `virtio-fs` device per share. The read-only store share comes from the runner itself.
 
@@ -238,7 +250,7 @@ path are recorded in `vm.pid` and `vm.runner`.
 - Agent, X11 and all other forwardings are disabled.
 - Host key checking is off and no known hosts file is used. The transport is a local vsock or unix socket.
 - The proxy command is `socat - VSOCK-CONNECT:<cid>:22` (QEMU) or `socat - UNIX-CONNECT:ssh.sock` (vfkit).
-- `COLORTERM` is passed to the guest.
+- The variables in `forwardEnv` are sent with `SendEnv`.
 
 `wait_ssh` polls for up to about 90 seconds. If the VM process exits in the meantime, the last console output is
 printed.
@@ -262,5 +274,5 @@ Two lock files coordinate concurrent invocations in the same project:
 
 When a session ends, `finish` (run from a `finally` block) releases its shared lock, takes the start lock and tries
 to take the session lock exclusively without blocking. This only succeeds when no other session is active, in which
-case the VM is stopped. With `BUB_KEEP_RUNNING=1` this step is skipped. Ctrl-C before the interactive session exits
+case the VM is stopped. With `keepRunning` this step is skipped. Ctrl-C before the interactive session exits
 with code 130, `HUP` and `TERM` with 129 and 143, and `finish` runs in all cases.

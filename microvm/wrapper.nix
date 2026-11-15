@@ -23,7 +23,11 @@ let
       guestSystem = vm.pkgs.stdenv.hostPlatform.system;
       guestUser = cfg.user;
       guestUid = cfg.uid;
-      homeShares = map (share: { inherit (share) tag source; }) (lib.attrValues cfg.homeShares);
+      homeShares = map (share: { inherit (share) tag source readOnly; }) (lib.attrValues cfg.homeShares);
+      network = cfg.network.enable;
+      keepRunning = cfg.keepRunning;
+      devShell = cfg.devShell.enable;
+      inherit (cfg) forwardEnv;
     }
   );
 
