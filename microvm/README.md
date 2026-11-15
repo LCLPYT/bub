@@ -187,10 +187,7 @@ Nix is disabled in the guest by default. It can be enabled with a writable store
   nix.settings = {
     experimental-features = [ "nix-command" "flakes" ];
     trusted-users = [ config.bub.user ];
-    # /tmp is a tmpfs, build on the root disk instead
-    build-dir = "/var/tmp/nix-build";
   };
-  systemd.tmpfiles.rules = [ "d /var/tmp/nix-build 0755 root root -" ];
 
   microvm.writableStoreOverlay = "/nix/.rw-store";
 
@@ -206,6 +203,26 @@ let the VM add arbitrary paths to the host store.
 
 Only the closure of the guest system is registered in the Nix database of the VM. Other host store paths (e.g. from
 the devShell) are visible, but Nix in the VM treats them as missing and builds or downloads them again.
+
+Builds run in the default `build-dir` (`/nix/var/nix/builds`), which is on the root disk, as `/tmp` is a tmpfs.
+Don't point `build-dir` below a world-writable directory such as `/var/tmp`: Nix refuses that with
+`Path "/var/tmp" is world-writable or a symlink`.
+
+### Disk usage
+
+Every project has its own root disk (`~/.local/state/bub-vm/<hash>/root.img`), and nothing on it is shared with the
+host or with other VMs. Anything that accumulates inside a VM therefore takes space once per project, often with the
+same content duplicated across projects:
+
+- the writable Nix store overlay: paths built or downloaded in the VM, even ones that also exist in the host store
+- container images and layers (Podman, Docker)
+- package manager caches (`~/.npm`, `~/.cache/pip`, `~/.cargo`, `~/.m2`, ...)
+
+The disk is a sparse file, so it only uses what has been written, but it grows up to `bub.diskSize` and doesn't
+necessarily shrink again when files are deleted in the VM. Clean up regularly inside the VM (`nix-collect-garbage`,
+`podman system prune`, cache cleanup commands), and delete the state directory of projects you no longer use. To
+share a cache between VMs, mount a host directory with [`bub.shares`](#shares), e.g. for `~/.npm`. Don't do this
+for the Nix store, see above.
 
 ### Example: Nested virtualization (QEMU / NixOS tests)
 
