@@ -119,7 +119,7 @@ If you want to use Claude Code in the VM, you can add it as general package in t
       environment.systemPackages = [ pkgs.claude-code ];
 
       # mounts ~/.local/share/bub-vm/claude on the host at ~/.claude in the vm
-      bub.homeShares.claude = {
+      bub.shares.claude = {
         source = "~/.local/share/bub-vm/claude";
         target = ".claude";
       };
@@ -135,7 +135,25 @@ If you want to use Claude Code in the VM, you can add it as general package in t
 })
 ```
 
-Home shares are created on the host if they don't exist yet.
+### Shares
+
+`bub.shares` mounts host directories into the VM. The `target` decides where:
+
+```nix
+bub.shares = {
+  # relative: inside the home directory of the VM user (~/.claude)
+  claude = { source = "~/.local/share/bub-vm/claude"; target = ".claude"; };
+  # absolute: at the given path
+  models = { source = "/mnt/models"; target = "/data/models"; readOnly = true; };
+  # no target: at the same path as on the host, e.g. for sibling repositories
+  libs = { source = "~/src/shared-libs"; };
+};
+```
+
+Share sources are created on the host if they don't exist yet. Targets can't be system directories (`/etc`, `/nix`,
+`/run`, ...) or the home directory itself, and two shares can't use the same target. Parent directories inside the
+home directory are created as the VM user. `bub.homeShares` still works as an alias.
+
 Set `readOnly = true` on a share to mount it read-only. On Linux this is enforced by virtiofsd on the host.
 vfkit has no read-only shares, so on macOS it is only a read-only mount inside the guest, which root can undo.
 
@@ -166,7 +184,7 @@ Podman is not enabled by default. Rootless Podman works out of the box with:
 | `bub.user`            | `bub`                           | Name of the user inside the VM.                                    |
 | `bub.uid`             | `501` on macOS, `1000` on Linux | UID of the VM user. Must match the host user.                      |
 | `bub.diskSize`        | `32768` (MiB)                   | Size of the sparse per-project root disk.                          |
-| `bub.homeShares`      | `{ }`                           | Host directories mounted into the home directory of the user.      |
+| `bub.shares`          | `{ }`                           | Host directories mounted into the VM, see [Shares](#shares).       |
 | `bub.network.enable`  | `true`                          | NAT network with access to the host network and the internet.      |
 | `bub.sudo.enable`     | `true`                          | Passwordless sudo for the VM user.                                 |
 | `bub.keepRunning`     | `false`                         | Keep the VM running after the last session (`BUB_KEEP_RUNNING`).   |
@@ -217,11 +235,11 @@ Using virtiofs is crucial for this setup, so the following hypervisors are chose
 - `flake.nix` evaluates a NixOS system (`guest.nix`) for the guest architecture on the host and wraps its microvm.nix runner in
   the `bub-vm` Python script (`wrapper.nix`, `bub-vm.py`).
 - microvm.nix bakes share paths into the runner at build time. Project-specific devices (project dir, the `meta`
-  dir, home shares, NIC, vsock) are added at runtime through `microvm.extraArgsScript`.
+  dir, shares, NIC, vsock) are added at runtime through `microvm.extraArgsScript`.
 - On Linux, `bub-vm` starts one unprivileged `virtiofsd` per share. vfkit has virtio-fs built in.
 - The guest mounts the `meta` share at `/run/bub/meta`. It contains the project path, the SSH public key and the
-  devShell environment. `bub-workdir.service` mounts the project at its
-  host path.
+  devShell environment and the list of mounts. `bub-mounts.service` mounts the project at its host path and the
+  shares at their targets.
 - SSH (for a proper TTY with resizing) runs over vsock: `socat VSOCK-CONNECT` on Linux, the vfkit vsock unix socket on macOS. 
   sshd in the guest is socket-activated on `vsock::22`, and the key pair is generated per project.
 - The guest user has the same UID as the host user (`bub.uid`, default 1000 on Linux, 501 on macOS), so files created in the project keep the right owner.

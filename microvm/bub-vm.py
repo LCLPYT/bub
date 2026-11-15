@@ -30,10 +30,6 @@ NIX = [
 ]
 SESSION = "/run/current-system/sw/bin/bub-session"
 POWEROFF = "/run/wrappers/bin/sudo /run/current-system/sw/bin/systemctl poweroff"
-SYSTEM_DIRS = [
-    "/bin*", "/boot*", "/dev*", "/etc*", "/lib*", "/nix*", "/proc*", "/root*",
-    "/run*", "/sbin*", "/sys*", "/tmp", "/usr*", "/var", "/var/lib*", "/var/log*",
-]
 UNSAFE_CHARS = re.compile(r"[\s,='\"\\$`*?\[\]]")
 DEVNULL = subprocess.DEVNULL
 
@@ -145,8 +141,11 @@ class Vm:
         ]
         if matches(self.workdir, sensitive):
             die(f"refusing to share '{self.workdir}' with the VM")
-        if matches(self.workdir, SYSTEM_DIRS):
+        if matches(self.workdir, self.config["systemDirs"]):
             die(f"'{self.workdir}' would shadow a system directory inside the VM")
+        guest_home = self.config["guestHome"]
+        if matches(self.workdir, [guest_home, f"{guest_home}/*"]):
+            die(f"'{self.workdir}' would shadow the home directory of the VM user")
 
         check_path("project path", self.workdir)
         check_path("state path", str(self.state))
@@ -175,9 +174,10 @@ class Vm:
         authorized_keys.chmod(0o600)
 
     def collect_shares(self):
-        shares = [("work", self.workdir, False), ("meta", str(self.meta), True)]
+        """Returns (tag, source, readonly, target) tuples. The meta share is mounted by the guest itself."""
+        shares = [("work", self.workdir, False, self.workdir), ("meta", str(self.meta), True, None)]
 
-        for share in self.config["homeShares"]:
+        for share in self.config["shares"]:
             tag, source = share["tag"], share["source"]
             if source == "~" or source.startswith("~/"):
                 source = self.home + source[1:]
@@ -185,9 +185,36 @@ class Vm:
             os.makedirs(source, exist_ok=True)
             source = os.path.realpath(source)
             check_path(f"share {tag}", source)
-            shares.append((tag, source, share["readOnly"]))
+            shares.append((tag, source, share["readOnly"], self.share_target(tag, share["target"], source)))
+
+        targets = [target for *_, target in shares if target is not None]
+        for target in sorted(set(targets)):
+            if targets.count(target) > 1:
+                die(f"more than one share is mounted at {target}")
 
         return shares
+
+    def share_target(self, tag, target, source):
+        home = self.config["guestHome"]
+        if target is None:
+            path = source
+        elif target.startswith("/"):
+            path = os.path.normpath(target)
+        else:
+            path = os.path.normpath(f"{home}/{target}")
+            if not path.startswith(f"{home}/"):
+                die(f"share {tag}: relative target '{target}' must stay inside {home}")
+
+        check_path(f"share {tag} target", path)
+        if matches(path, ["/", home, *self.config["systemDirs"]]):
+            die(f"share {tag}: can't mount at '{path}', it would shadow a system or the home directory inside the VM")
+        return path
+
+    def write_mounts(self, shares):
+        """The guest mounts these in order, so parents (which sort first) are mounted before nested shares."""
+        mounts = sorted((target, tag, "ro" if readonly else "rw") for tag, _, readonly, target in shares if target)
+        text = "".join(f"{tag} {mode} {target}\n" for target, tag, mode in mounts)
+        (self.meta / "mounts").write_text(text)
 
     def flake_hash(self):
         inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=self.workdir,
@@ -324,7 +351,7 @@ class Vm:
                 "-device", f"virtio-net-pci,netdev=bubnet,mac={self.mac}",
             ]
 
-        for tag, source, readonly in shares:
+        for tag, source, readonly, _target in shares:
             self.start_virtiofsd(tag, source, readonly)
             sockets.append(self.state / f"virtiofs-{tag}.sock")
             args += [
@@ -340,7 +367,7 @@ class Vm:
         args = ["--device", f"virtio-vsock,port=22,socketURL={self.state}/ssh.sock,connect"]
         if self.config["network"]:
             args += ["--device", f"virtio-net,nat,mac={self.mac}"]
-        for tag, source, _readonly in shares:
+        for tag, source, _readonly, _target in shares:
             args += ["--device", f"virtio-fs,sharedDir={source},mountTag={tag}"]
         return args
 
@@ -491,6 +518,7 @@ def run_session(vm, command):
     vm.validate()
     vm.setup_state()
     shares = vm.collect_shares()
+    vm.write_mounts(shares)
     vm.prepare_devshell()
 
     start_lock = open_lock(vm.state / "start.lock", fcntl.LOCK_EX)

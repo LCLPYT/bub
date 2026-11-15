@@ -9,6 +9,7 @@
 let
   cfg = config.bub;
   home = "/home/${cfg.user}";
+  systemDirsCase = lib.concatStringsSep " | " ([ "/" ] ++ cfg.systemDirs);
   isDarwinHost = hostPkgs.stdenv.hostPlatform.isDarwin;
 
   # vfkit puts stdin into raw mode for `virtio-serial,stdio` and fails when it is not a tty,
@@ -30,7 +31,7 @@ let
       sleep 0.1
     done
     if [ ! -e /run/bub/ready ]; then
-      echo "bub-session: project directory is not mounted, see 'journalctl -u bub-workdir'" >&2
+      echo "bub-session: project directory is not mounted, see 'journalctl -u bub-mounts'" >&2
       exit 1
     fi
 
@@ -50,6 +51,8 @@ let
   '';
 in
 {
+  imports = [ (lib.mkRenamedOptionModule [ "bub" "homeShares" ] [ "bub" "shares" ]) ];
+
   options.bub = {
     user = lib.mkOption {
       type = lib.types.str;
@@ -69,9 +72,9 @@ in
       description = "Size of the sparse per-project root disk in MiB.";
     };
 
-    homeShares = lib.mkOption {
+    shares = lib.mkOption {
       default = { };
-      description = "Host directories mounted into the home directory of the VM user.";
+      description = "Host directories mounted into the VM.";
       type = lib.types.attrsOf (
         lib.types.submodule (
           { name, ... }:
@@ -82,8 +85,12 @@ in
                 description = "Host directory. A leading `~` expands to the home directory of the host user.";
               };
               target = lib.mkOption {
-                type = lib.types.str;
-                description = "Mount point relative to the home directory of the VM user.";
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = ''
+                  Mount point in the VM. A relative path is relative to the home directory of the VM user, an
+                  absolute path is used as is and `null` mounts the directory at the same path as on the host.
+                '';
               };
               readOnly = lib.mkOption {
                 type = lib.types.bool;
@@ -95,13 +102,38 @@ in
               };
               tag = lib.mkOption {
                 type = lib.types.str;
-                default = "h-${name}";
+                default = "s-${name}";
                 internal = true;
               };
             };
           }
         )
       );
+    };
+
+    systemDirs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      internal = true;
+      readOnly = true;
+      default = [
+        "/bin*"
+        "/boot*"
+        "/dev*"
+        "/etc*"
+        "/lib*"
+        "/nix*"
+        "/proc*"
+        "/root*"
+        "/run*"
+        "/sbin*"
+        "/sys*"
+        "/tmp"
+        "/usr*"
+        "/var"
+        "/var/lib*"
+        "/var/log*"
+      ];
+      description = "Guest paths that can't be used as mount points. A trailing `*` matches any suffix.";
     };
 
     network.enable = lib.mkOption {
@@ -140,6 +172,11 @@ in
   };
 
   config = {
+    assertions = lib.mapAttrsToList (name: share: {
+      assertion = builtins.match "[A-Za-z0-9_-]+" name != null && lib.stringLength share.tag <= 36;
+      message = "bub.shares.${name}: share names may only contain letters, digits, `_` and `-` and must be at most 34 characters long.";
+    }) cfg.shares;
+
     system.stateVersion = lib.mkDefault "26.05";
     networking.hostName = lib.mkDefault "bub";
 
@@ -246,24 +283,14 @@ in
     };
     systemd.sockets.sshd.socketConfig.ListenStream = lib.mkForce [ "vsock::22" ];
 
-    fileSystems = {
-      "/run/bub/meta" = {
-        device = "meta";
-        fsType = "virtiofs";
-        options = [ "ro" ];
-      };
-    }
-    // lib.mapAttrs' (
-      _: share:
-      lib.nameValuePair "${home}/${share.target}" {
-        device = share.tag;
-        fsType = "virtiofs";
-        options = lib.optional share.readOnly "ro";
-      }
-    ) cfg.homeShares;
+    fileSystems."/run/bub/meta" = {
+      device = "meta";
+      fsType = "virtiofs";
+      options = [ "ro" ];
+    };
 
-    systemd.services.bub-workdir = {
-      description = "Mount the project directory at its host path";
+    systemd.services.bub-mounts = {
+      description = "Mount the project directory and shares";
       wantedBy = [ "multi-user.target" ];
       unitConfig.RequiresMountsFor = [ "/run/bub/meta" ];
       path = [
@@ -275,19 +302,34 @@ in
         RemainAfterExit = true;
       };
       script = ''
+        refuse() {
+          echo "refusing to mount $1 at $2" >&2
+          exit 1
+        }
+
         wd=$(cat /run/bub/meta/workdir)
         case "$wd" in
-          /*) ;;
-          *) echo "invalid project path: $wd" >&2; exit 1 ;;
+          ${home} | ${home}/*) refuse project "$wd" ;;
         esac
-        case "$wd" in
-          / | /bin* | /boot* | /dev* | /etc* | /lib* | /nix* | /proc* | /root* | /run* | /sbin* | /sys* | /tmp | /usr* | /var | /var/lib* | /var/log* | ${home} | ${home}/*)
-            echo "refusing to mount the project at $wd" >&2
-            exit 1
-            ;;
-        esac
-        mkdir -p "$wd"
-        mountpoint -q "$wd" || mount -t virtiofs work "$wd"
+
+        while read -r tag mode target; do
+          case "$target" in
+            /*) ;;
+            *) refuse "$tag" "$target" ;;
+          esac
+          case "$target" in
+            ${systemDirsCase} | ${home} | *//* | */./* | */../* | */. | */..) refuse "$tag" "$target" ;;
+          esac
+
+          case "$target" in
+            ${home}/*) runuser -u ${cfg.user} -- mkdir -p "$target" ;;
+            *) mkdir -p "$target" ;;
+          esac
+          if ! mountpoint -q "$target"; then
+            mount -t virtiofs -o "$mode" "$tag" "$target"
+          fi
+        done < /run/bub/meta/mounts
+
         touch /run/bub/ready
       '';
     };

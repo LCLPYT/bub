@@ -47,7 +47,9 @@ to `PATH` and sets `BUB_VM_CONFIG` to a JSON file generated from the evaluated g
 | `guestSystem` | Guest system, e.g. `x86_64-linux`                           |
 | `guestUser`   | `bub.user`                                                  |
 | `guestUid`    | `bub.uid`                                                   |
-| `homeShares`  | `bub.homeShares` as a list of `{ tag, source, readOnly }`   |
+| `guestHome`   | Home directory of `bub.user`                                |
+| `systemDirs`  | `bub.systemDirs`, guest paths that can't be mount points    |
+| `shares`      | `bub.shares` as a list of `{ tag, source, target, readOnly }` |
 | `network`     | `bub.network.enable`                                        |
 | `keepRunning` | `bub.keepRunning`                                           |
 | `devShell`    | `bub.devShell.enable`                                       |
@@ -65,15 +67,20 @@ standard library. The build byte-compiles it, so syntax errors fail the build.
 | `bub.user`        | `bub`                           | Name of the user inside the VM.                                |
 | `bub.uid`         | `501` on macOS, `1000` on Linux | UID of the VM user. Must match the host user.                  |
 | `bub.diskSize`    | `32768` (MiB)                   | Size of the sparse per-project root disk.                      |
-| `bub.homeShares`  | `{ }`                           | Host directories mounted into the home directory of the user.  |
+| `bub.shares`      | `{ }`                           | Host directories mounted into the VM (alias `bub.homeShares`). |
 | `bub.network.enable` | `true`                       | NAT network interface.                                         |
 | `bub.sudo.enable` | `true`                          | Passwordless sudo for the VM user.                             |
 | `bub.keepRunning` | `false`                         | Default for `BUB_KEEP_RUNNING`.                                |
 | `bub.devShell.enable` | `true`                      | Default for `BUB_DEVSHELL`.                                    |
 | `bub.forwardEnv`  | `[ "COLORTERM" ]`               | Variables sent by ssh (`SendEnv`) and accepted by sshd.        |
 
-Each home share has a `source` (host path, a leading `~` expands to the host home directory), a `target`
-(relative to the guest home directory) and `readOnly` (default `false`). Its virtiofs tag is `h-<name>`.
+Each share has a `source` (host path, a leading `~` expands to the host home directory), a `target` and
+`readOnly` (default `false`). A relative `target` is relative to the guest home directory, an absolute one is used
+as is and `null` (the default) means the source path on the host. Its virtiofs tag is `s-<name>`, so names are
+limited to letters, digits, `_` and `-` and 34 characters (virtiofs tags have at most 36), which is asserted.
+
+The internal, read-only `bub.systemDirs` lists the guest paths that can't be mount points (`/etc*`, `/nix*`,
+`/run*`, ...). It is used by both the guest and bub-vm.
 
 A base set of packages (curl, fd, git, jq, ripgrep, ...) is added to `environment.systemPackages`.
 
@@ -114,17 +121,23 @@ and X11 forwarding are disabled. TCP forwarding is limited to `local`. The varia
 
 ### Mounts
 
-- `/run/bub/meta`: virtiofs tag `meta`, read-only. Contains `workdir`, `authorized_keys` and optionally
-  `devenv.sh`.
-- `~/<target>` for every home share: virtiofs tag `h-<name>`, `ro` if `readOnly` is set.
-- The project directory: mounted by `bub-workdir.service`, see below.
+- `/run/bub/meta`: virtiofs tag `meta`, read-only, a regular NixOS file system. Contains `workdir`, `mounts`,
+  `authorized_keys` and optionally `devenv.sh`.
+- The project directory and all shares: mounted by `bub-mounts.service`, see below. Mirrored targets are only known
+  at runtime, so none of them are NixOS file systems.
 
-### bub-workdir.service
+### bub-mounts.service
 
-A oneshot service that runs after `/run/bub/meta` is mounted. It reads the project path from
-`/run/bub/meta/workdir`, requires it to be absolute and refuses system directories as well as the guest home
-directory. It then creates the directory, mounts the virtiofs tag `work` there (so the project has the same path
-as on the host) and touches `/run/bub/ready`.
+A oneshot service that runs after `/run/bub/meta` is mounted. It refuses a project path (`/run/bub/meta/workdir`)
+equal to or inside the guest home directory. It then reads `/run/bub/meta/mounts`, one `<tag> <ro|rw> <target>`
+line per mount, written by bub-vm in sorted order so parents are mounted before nested mounts. For each line it
+
+- requires an absolute, normalized target that is neither `/`, a system directory nor the guest home directory,
+- creates the target, as the VM user when it is inside the home directory, so parent directories like `~/.config`
+  don't end up owned by root,
+- mounts the virtiofs tag there unless it is already a mount point.
+
+Finally it touches `/run/bub/ready`.
 
 ### bub-session
 
@@ -181,21 +194,25 @@ determine:
    - The host UID must equal `guestUid`, otherwise file ownership in shares would break.
    - Refuses to share `/`, `$HOME`, `~/.ssh`, `~/.gnupg`, `~/.config`, `~/.local`, `~/.local/share` and the
      bub-vm state directory.
-   - Refuses paths that would shadow system directories in the guest (`/etc`, `/nix`, `/run`, ...).
+   - Refuses paths that would shadow system directories in the guest (`/etc`, `/nix`, `/run`, ...) or the guest home directory.
    - Rejects paths with whitespace, commas, `=`, quotes, backslashes, `$`, backticks and glob characters, since
      they can't be passed safely in hypervisor arguments.
    - The state path must be shorter than 80 characters because of the unix socket path limit.
    - With QEMU, `/dev/kvm` and `/dev/vhost-vsock` must be writable.
 2. `setup_state`: creates the state and `meta` directories (mode 700), writes the project path, generates the SSH
    key pair if missing and copies the public key to `meta/authorized_keys`.
-3. `collect_shares`: builds the share list: `work` (project), `meta` and every home share. Home share sources get
-   `~` expanded, are created if missing, resolved to physical paths and validated.
-4. `prepare_devshell`, see [devShell](#devshell).
-5. Takes the start lock. If the VM is not running, `start_vm`. If it is running with a different runner, a hint to
+3. `collect_shares`: builds the share list: `work` (project, mounted at its host path), `meta` and every share.
+   Share sources get `~` expanded, are created if missing, resolved to physical paths and validated. Targets are
+   resolved (relative to `guestHome`, absolute, or the resolved source) and normalized. Relative targets must stay
+   inside the home directory, no target may be `/`, the home directory or a system directory, and two mounts can't
+   share a target.
+4. `write_mounts` writes `meta/mounts` for `bub-mounts.service`.
+5. `prepare_devshell`, see [devShell](#devshell).
+6. Takes the start lock. If the VM is not running, `start_vm`. If it is running with a different runner, a hint to
    restart it is logged.
-6. Takes a shared session lock, releases the start lock and installs handlers that turn `HUP` and `TERM` into a
+7. Takes a shared session lock, releases the start lock and installs handlers that turn `HUP` and `TERM` into a
    regular exit.
-7. `wait_ssh`, then runs `bub-session` via SSH with the shell-quoted arguments. A tty is requested when stdin and
+8. `wait_ssh`, then runs `bub-session` via SSH with the shell-quoted arguments. A tty is requested when stdin and
    stdout are terminals. The exit code of the remote command is returned.
 
 ### devShell

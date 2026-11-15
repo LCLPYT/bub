@@ -23,7 +23,16 @@ let
       guestSystem = vm.pkgs.stdenv.hostPlatform.system;
       guestUser = cfg.user;
       guestUid = cfg.uid;
-      homeShares = map (share: { inherit (share) tag source readOnly; }) (lib.attrValues cfg.homeShares);
+      guestHome = vm.config.users.users.${cfg.user}.home;
+      inherit (cfg) systemDirs;
+      shares = map (share: {
+        inherit (share)
+          tag
+          source
+          target
+          readOnly
+          ;
+      }) (lib.attrValues cfg.shares);
       network = cfg.network.enable;
       keepRunning = cfg.keepRunning;
       devShell = cfg.devShell.enable;
