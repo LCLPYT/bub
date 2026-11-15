@@ -38,13 +38,14 @@ nix run github:LCLPYT/bub?dir=microvm -- bash
 
 ## Installation
 
-Per system:
+### Default config
+You can install the default configuration system-wide (no customization; see below for customizing the vm):
 
 ```bash
 nix profile install github:LCLPYT/bub?dir=microvm
 ```
 
-Or via home-manager (supports customization):
+### Via home-manager (supports customization)
 
 ```nix
 home.packages = [
@@ -69,10 +70,45 @@ home.packages = [
 ];
 ```
 
+### Generic flake + profile (e.g. on non-NixOS systems)
+You can write a small flake to customize the vm config and install it as profile:
+
+```
+# ~/.config/bub-vm/flake.nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    bub-vm = {
+      url = "github:LCLPYT/bub?dir=microvm";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { bub-vm, ... }: {
+    packages.x86_64-linux.default = bub-vm.lib.mkBub {
+      system = "x86_64-linux";
+      modules = [
+        ({ options, pkgs, ... }: {
+          bub.packages = options.bub.packages.default ++ with pkgs; [ nodejs ];
+          microvm.mem = 8192;
+        })
+      ];
+    };
+  };
+}
+```
+
+Then:
+
+```
+nix profile install ~/.config/bub-vm               # first install
+nix flake update --flake ~/.config/bub-vm          # bump bub/nixpkgs
+nix profile upgrade --all                          # rebuild after editing or updating
+```
+
 ### Example: Claude Code
 
-Claude Code is not included by default. To add it, install the package and share its config directory with the VM,
-so that the login and settings persist across VMs:
+If you want to use Claude Code in the VM, you can add it as general package in the guest:
 
 ```nix
 (inputs.bub-vm.lib.mkBub {
