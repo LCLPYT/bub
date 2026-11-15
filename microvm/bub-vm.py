@@ -394,9 +394,9 @@ class Vm:
 
     def ssh_command(self, *args):
         if self.hypervisor == "qemu":
-            proxy = f"exec socat - VSOCK-CONNECT:{self.cid}:22"
+            proxy = f"socat - VSOCK-CONNECT:{self.cid}:22"
         else:
-            proxy = f"exec socat - UNIX-CONNECT:{self.state}/ssh.sock"
+            proxy = f"socat - UNIX-CONNECT:{self.state}/ssh.sock"
 
         return [
             "ssh",

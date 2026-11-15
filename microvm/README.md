@@ -72,7 +72,7 @@ home.packages = [
 ### Generic flake + profile (e.g. on non-NixOS systems)
 You can write a small flake to customize the vm config and install it as profile:
 
-```
+```bash
 # ~/.config/bub-vm/flake.nix
 {
   inputs = {
