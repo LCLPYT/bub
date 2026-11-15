@@ -32,6 +32,8 @@ SESSION = "/run/current-system/sw/bin/bub-session"
 POWEROFF = "/run/wrappers/bin/sudo /run/current-system/sw/bin/systemctl poweroff"
 UNSAFE_CHARS = re.compile(r"[\s,='\"\\$`*?\[\]]")
 DEVNULL = subprocess.DEVNULL
+# Primary group of the guest user ("users"). Unprivileged virtiofsd can't create files as another gid.
+GUEST_GID = 100
 
 
 def log(message):
@@ -333,7 +335,7 @@ class Vm:
 
     def start_virtiofsd(self, tag, source, readonly=False):
         command = ["virtiofsd", f"--socket-path=virtiofs-{tag}.sock", f"--shared-dir={source}",
-                   "--sandbox=none", "--cache=auto"]
+                   "--sandbox=none", "--cache=auto", f"--translate-gid=map:{GUEST_GID}:{os.getgid()}:1"]
         if readonly:
             command.append("--readonly")
 
