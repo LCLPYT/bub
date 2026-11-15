@@ -10,8 +10,8 @@ bub-vm consists of four files:
 |---------------|----------------------------------------------------------------------------------------------|
 | `flake.nix`   | Flake entry point. Evaluates the guest system and builds the `bub-vm` package.               |
 | `guest.nix`   | NixOS module for the guest. Defines the `bub.*` options and the guest configuration.         |
-| `wrapper.nix` | Turns the evaluated guest into the `bub-vm` shell application.                               |
-| `bub-vm.sh`   | Host side logic: state, shares, devShell, VM lifecycle and SSH sessions.                     |
+| `wrapper.nix` | Turns the evaluated guest into the `bub-vm` package with a JSON config.                      |
+| `bub-vm.py`   | Host side logic: state, shares, devShell, VM lifecycle and SSH sessions.                     |
 
 The guest is a NixOS system built on the host for the guest architecture. It boots from the host `/nix/store`,
 which is shared read-only, and keeps its mutable state on a per-project root disk.
@@ -36,19 +36,21 @@ Custom configurations (e.g. via home-manager) use `mkBub` and pass extra NixOS m
 
 ## wrapper.nix
 
-Builds `bub-vm` with `writeShellApplication`. Values from the evaluated guest are prepended to `bub-vm.sh` as
-shell variables:
+Installs `bub-vm.py` to `libexec/` and creates `bin/bub-vm` with `makeWrapper`. The wrapper runs the script with
+`python3 -I` (isolated mode, so `PYTHONPATH` and user site packages are ignored), prepends the runtime dependencies
+to `PATH` and sets `BUB_VM_CONFIG` to a JSON file generated from the evaluated guest:
 
-| Variable           | Source                                                      |
-|--------------------|-------------------------------------------------------------|
-| `BUB_RUNNER`       | `microvm.declaredRunner`, the microvm.nix runner derivation |
-| `BUB_HYPERVISOR`   | `microvm.hypervisor` (`qemu` or `vfkit`)                    |
-| `BUB_GUEST_SYSTEM` | Guest system, e.g. `x86_64-linux`                           |
-| `BUB_GUEST_USER`   | `bub.user`                                                  |
-| `BUB_GUEST_UID`    | `bub.uid`                                                   |
-| `BUB_HOME_SHARES`  | `bub.homeShares` as `tag<TAB>source` lines                  |
+| Key           | Source                                                      |
+|---------------|-------------------------------------------------------------|
+| `runner`      | `microvm.declaredRunner`, the microvm.nix runner derivation |
+| `hypervisor`  | `microvm.hypervisor` (`qemu` or `vfkit`)                    |
+| `guestSystem` | Guest system, e.g. `x86_64-linux`                           |
+| `guestUser`   | `bub.user`                                                  |
+| `guestUid`    | `bub.uid`                                                   |
+| `homeShares`  | `bub.homeShares` as a list of `{ tag, source }` objects     |
 
-Runtime dependencies are coreutils, findutils, flock, git, openssh, perl and socat, plus virtiofsd on Linux hosts.
+Runtime dependencies are git, openssh and socat, plus virtiofsd on Linux hosts. The script only uses the Python
+standard library. The build byte-compiles it, so syntax errors fail the build.
 
 ## guest.nix
 
@@ -121,7 +123,7 @@ The command executed for every SSH session:
 3. Sources `/etc/profile` if the NixOS environment is not set up yet, then `/run/bub/meta/devenv.sh` if present.
 4. Runs the given command, or `bash -i` without arguments.
 
-## bub-vm.sh
+## bub-vm.py
 
 ### Commands
 
@@ -164,7 +166,7 @@ determine:
 ### Startup sequence
 
 1. `validate`
-   - The host UID must equal `BUB_GUEST_UID`, otherwise file ownership in shares would break.
+   - The host UID must equal `guestUid`, otherwise file ownership in shares would break.
    - Refuses to share `/`, `$HOME`, `~/.ssh`, `~/.gnupg`, `~/.config`, `~/.local`, `~/.local/share` and the
      bub-vm state directory.
    - Refuses paths that would shadow system directories in the guest (`/etc`, `/nix`, `/run`, ...).
@@ -179,7 +181,8 @@ determine:
 4. `prepare_devshell`, see [devShell](#devshell).
 5. Takes the start lock. If the VM is not running, `start_vm`. If it is running with a different runner, a hint to
    restart it is logged.
-6. Takes a shared session lock, releases the start lock and installs the exit traps.
+6. Takes a shared session lock, releases the start lock and installs handlers that turn `HUP` and `TERM` into a
+   regular exit.
 7. `wait_ssh`, then runs `bub-session` via SSH with the shell-quoted arguments. A tty is requested when stdin and
    stdout are terminals. The exit code of the remote command is returned.
 
@@ -202,8 +205,13 @@ On any failure the devShell is removed and the session continues without it.
 ### Starting the VM
 
 Old sockets and logs are removed first. Background processes are started with `detach`, which runs them in the
-state directory, in a new session (`setsid`, so Ctrl-C and hangups of the terminal don't reach them), with stdin
-from `/dev/null` and output appended to a log file.
+state directory, in a new session (`start_new_session`, so Ctrl-C and hangups of the terminal don't reach them),
+with stdin from `/dev/null` and output appended to a log file. Lock files are not inherited, since Python opens files
+as non-inheritable and `subprocess` closes all other descriptors.
+
+Processes started by the current invocation are direct children of it and stay zombies after they exit, so
+`kill(pid, 0)` would still succeed. Their liveness is therefore checked with `Popen.poll()`, which also reaps them.
+Processes started by other invocations are checked with `kill(pid, 0)`.
 
 QEMU (Linux):
 
@@ -218,14 +226,15 @@ vfkit (macOS):
 - A vsock device that connects guest port 22 to the unix socket `ssh.sock`.
 - A `virtio-fs` device per share. The read-only store share comes from the runner itself.
 
-The arguments are exported as `BUB_HYPERVISOR_ARGS`, the runner's `microvm-run` is detached and its PID and store
+The arguments are joined with spaces and passed as `BUB_HYPERVISOR_ARGS`, the runner's `microvm-run` is detached and its PID and store
 path are recorded in `vm.pid` and `vm.runner`.
 
 ### SSH
 
-`vm_ssh` runs ssh with an isolated configuration:
+`ssh_command` builds an ssh invocation with an isolated configuration:
 
 - `-F /dev/null` ignores the user SSH config, `SSH_AUTH_SOCK` is unset and only the project key is used.
+- `SHELL` is set to `/bin/sh`, because ssh runs the proxy command with `$SHELL`, which may not be a POSIX shell.
 - Agent, X11 and all other forwardings are disabled.
 - Host key checking is off and no known hosts file is used. The transport is a local vsock or unix socket.
 - The proxy command is `socat - VSOCK-CONNECT:<cid>:22` (QEMU) or `socat - UNIX-CONNECT:ssh.sock` (vfkit).
@@ -233,6 +242,10 @@ path are recorded in `vm.pid` and `vm.runner`.
 
 `wait_ssh` polls for up to about 90 seconds. If the VM process exits in the meantime, the last console output is
 printed.
+
+The interactive session runs ssh as a child process. While it runs, `INT`, `HUP` and `TERM` are forwarded to ssh
+instead of interrupting bub-vm, so cleanup only starts once ssh has exited. The exit code of the remote command is
+returned, or `128 + signal` if ssh was killed by a signal.
 
 ### Stopping the VM
 
@@ -244,10 +257,10 @@ sockets are removed.
 
 Two lock files coordinate concurrent invocations in the same project:
 
-- `start.lock` (fd 8, exclusive): serializes starting and stopping the VM.
-- `sessions.lock` (fd 9, shared): held by every running session.
+- `start.lock` (exclusive `flock`): serializes starting and stopping the VM.
+- `sessions.lock` (shared `flock`): held by every running session.
 
-When a session ends, the `finish` trap releases its shared lock, takes the start lock and tries to take the
-session lock exclusively without blocking. This only succeeds when no other session is active, in which case the
-VM is stopped. With `BUB_KEEP_RUNNING=1` this step is skipped. `HUP`, `INT` and `TERM` exit with the usual codes so
-the trap runs.
+When a session ends, `finish` (run from a `finally` block) releases its shared lock, takes the start lock and tries
+to take the session lock exclusively without blocking. This only succeeds when no other session is active, in which
+case the VM is stopped. With `BUB_KEEP_RUNNING=1` this step is skipped. Ctrl-C before the interactive session exits
+with code 130, `HUP` and `TERM` with 129 and 143, and `finish` runs in all cases.

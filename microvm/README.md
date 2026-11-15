@@ -141,7 +141,7 @@ Using virtiofs is crucial for this setup, so the following hypervisors are chose
 | `aarch64-darwin` | vfkit      | `aarch64-linux` |
 
 - `flake.nix` evaluates a NixOS system (`guest.nix`) for the guest architecture on the host and wraps its microvm.nix runner in
-  the `bub-vm` script (`wrapper.nix`, `bub-vm.sh`).
+  the `bub-vm` Python script (`wrapper.nix`, `bub-vm.py`).
 - microvm.nix bakes share paths into the runner at build time. Project-specific devices (project dir, the `meta`
   dir, home shares, NIC, vsock) are added at runtime through `microvm.extraArgsScript`.
 - On Linux, `bub-vm` starts one unprivileged `virtiofsd` per share. vfkit has virtio-fs built in.
