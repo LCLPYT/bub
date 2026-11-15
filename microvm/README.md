@@ -284,6 +284,9 @@ bub-vm               # interactive shell
 bub-vm --stop        # stop the VM of this directory
 bub-vm --destroy     # delete the VM disk of this directory
 bub-vm --log         # console output
+bub-vm --list        # all VMs with their project, status, last use and disk usage
+bub-vm --gc          # delete VMs whose project directory no longer exists
+bub-vm --gc --older-than 30   # ... and VMs not used for 30 days
 ```
 
 Each project directory gets its own VM with a persistent, sparse root disk under `~/.local/state/bub-vm/<hash>/`. 
@@ -316,7 +319,7 @@ flowchart TB
     mkVm["lib.mkVm<br/>nixosSystem for the guest system"]
     runner["microvm.declaredRunner<br/>QEMU or vfkit runner"]
     wrapper["wrapper.nix<br/>bub-vm-config.json"]
-    bubVm["bub-vm<br/>bub-vm.py"]
+    bubVm["bub-vm<br/>bub_vm/"]
 
     userMods --> mkVm
     guestNix --> mkVm
@@ -372,7 +375,7 @@ Using virtiofs is crucial for this setup, so the following hypervisors are chose
 | `aarch64-darwin` | vfkit      | `aarch64-linux` |
 
 - `flake.nix` evaluates a NixOS system (`guest.nix`) for the guest architecture on the host and wraps its microvm.nix runner in
-  the `bub-vm` Python script (`wrapper.nix`, `bub-vm.py`).
+  the `bub-vm` Python script (`wrapper.nix`, `bub_vm/`).
 - microvm.nix bakes share paths into the runner at build time. Project-specific devices (project dir, the `meta`
   dir, shares, NIC, vsock) are added at runtime through `microvm.extraArgsScript`.
 - On Linux, `bub-vm` starts one unprivileged `virtiofsd` per share. vfkit has virtio-fs built in.

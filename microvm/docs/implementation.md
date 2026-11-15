@@ -4,14 +4,14 @@ This document describes how bub-vm works internally. For installation and usage,
 
 ## Overview
 
-bub-vm consists of four files:
+bub-vm consists of three Nix files and a Python package:
 
 | File          | Role                                                                                         |
 |---------------|----------------------------------------------------------------------------------------------|
 | `flake.nix`   | Flake entry point. Evaluates the guest system and builds the `bub-vm` package.               |
 | `guest.nix`   | NixOS module for the guest. Defines the `bub.*` options and the guest configuration.         |
 | `wrapper.nix` | Turns the evaluated guest into the `bub-vm` package with a JSON config.                      |
-| `bub-vm.py`   | Host side logic: state, shares, devShell, VM lifecycle and SSH sessions.                     |
+| `bub_vm/`     | Host side logic: state, shares, devShell, VM lifecycle, SSH sessions and VM management.      |
 
 The guest is a NixOS system built on the host for the guest architecture. It boots from the host `/nix/store`,
 which is shared read-only, and keeps its mutable state on a per-project root disk.
@@ -36,8 +36,9 @@ Custom configurations (e.g. via home-manager) use `mkBub` and pass extra NixOS m
 
 ## wrapper.nix
 
-Installs `bub-vm.py` to `libexec/` and creates `bin/bub-vm` with `makeWrapper`. The wrapper runs the script with
-`python3 -I` (isolated mode, so `PYTHONPATH` and user site packages are ignored), prepends the runtime dependencies
+Installs the `bub_vm` package to `libexec/`, byte-compiles it and creates `bin/bub-vm` with `makeWrapper`. The
+wrapper runs `bub_vm/__main__.py` with `python3 -I` (isolated mode, so `PYTHONPATH` and user site packages are
+ignored, and the script directory is not added to `sys.path`; the launcher adds `libexec/` itself), prepends the runtime dependencies
 to `PATH` and sets `BUB_VM_CONFIG` to a JSON file generated from the evaluated guest:
 
 | Key           | Source                                                      |
@@ -152,7 +153,20 @@ The command executed for every SSH session:
 3. Sources `/etc/profile` if the NixOS environment is not set up yet, then `/run/bub/meta/devenv.sh` if present.
 4. Runs the given command, or `bash -i` without arguments.
 
-## bub-vm.py
+## bub_vm
+
+| Module        | Content                                                                          |
+|---------------|----------------------------------------------------------------------------------|
+| `__main__.py` | Launcher, also allows `python3 -m bub_vm` from the source tree.                  |
+| `cli.py`      | Argument parsing, `--stop`, `--destroy` and `--log`.                             |
+| `state.py`    | `State`: the state directory of a project hash, its CID, MAC and status queries. |
+| `vm.py`       | `Vm`: state setup, starting the hypervisor and virtiofsd, waiting and stopping.  |
+| `shares.py`   | Path validation, share list and `meta/mounts`.                                   |
+| `devshell.py` | Approving and building the devShell.                                             |
+| `ssh.py`      | The isolated ssh invocation.                                                     |
+| `session.py`  | Running a session, signal forwarding and the session locks.                      |
+| `manage.py`   | `--list` and `--gc` over the state directories of all projects.                  |
+| `util.py`     | Logging, path matching, file, process and lock helpers.                          |
 
 ### Commands
 
@@ -162,6 +176,8 @@ The command executed for every SSH session:
 | `bub-vm --stop`        | Stop the VM of the current directory.                            |
 | `bub-vm --destroy`     | Stop the VM and delete its state directory, asks on a tty.       |
 | `bub-vm --log`         | Print `vm.log` and `serial.log`.                                 |
+| `bub-vm --list`        | List the VMs of all projects, see [Managing VMs](#managing-vms). |
+| `bub-vm --gc [--older-than DAYS] [--yes]` | Delete unused VMs, see [Managing VMs](#managing-vms). |
 
 Environment variables: `BUB_DEVSHELL` (`0` or `1`) and `BUB_KEEP_RUNNING` (`0` or `1`) override
 `bub.devShell.enable` and `bub.keepRunning`. Unset or empty means the configured default.
@@ -180,7 +196,7 @@ determine:
 | Path                   | Content                                                   |
 |------------------------|-----------------------------------------------------------|
 | `root.img`             | Sparse root disk of the guest.                            |
-| `workdir`              | Project path, for reference.                              |
+| `workdir`              | Project path, rewritten on every session start.           |
 | `id_ed25519{,.pub}`    | SSH key pair of the project.                              |
 | `meta/`                | Shared read-only with the guest as `meta`.                |
 | `devshell.approved`    | Hash of the approved Nix files.                           |
@@ -297,3 +313,19 @@ When a session ends, `finish` (run from a `finally` block) releases its shared l
 to take the session lock exclusively without blocking. This only succeeds when no other session is active, in which
 case the VM is stopped. With `keepRunning` this step is skipped. Ctrl-C before the interactive session exits
 with code 130, `HUP` and `TERM` with 129 and 143, and `finish` runs in all cases.
+
+### Managing VMs
+
+`--list` and `--gc` don't need `BUB_VM_CONFIG` and work on every directory under the state root whose name is a
+12 digit hex hash. For each of them:
+
+- The project is read from `workdir`. It counts as missing if the file is absent or the directory doesn't exist.
+- The last use is the mtime of `workdir`, i.e. the start of the last session.
+- A VM is in use if the PID in `vm.pid` is alive or `sessions.lock` can't be locked exclusively.
+- The disk usage is the allocated size (`st_blocks`) of all files, so the sparse `root.img` only counts the
+  blocks that were written. Symlinks (the devShell profile) are not followed.
+
+`--gc` deletes the state directories that are not in use and whose project is missing or, with
+`--older-than DAYS`, that were last used more than `DAYS` days ago. It lists them and asks for confirmation,
+which `--yes` skips. Without a tty `--yes` is required. Each directory is deleted while holding `start.lock`
+(directories whose lock is held are skipped), after checking again that it is still unused.

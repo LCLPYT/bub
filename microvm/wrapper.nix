@@ -53,10 +53,12 @@ runCommand "bub-vm"
     meta.mainProgram = "bub-vm";
   }
   ''
-    install -Dm644 ${./bub-vm.py} $out/libexec/bub-vm.py
-    ${python3.interpreter} -m py_compile $out/libexec/bub-vm.py
+    mkdir -p $out/libexec
+    cp -r ${./bub_vm} $out/libexec/bub_vm
+    chmod -R u+w $out/libexec/bub_vm
+    ${python3.interpreter} -m compileall -q $out/libexec/bub_vm
     makeWrapper ${python3.interpreter} $out/bin/bub-vm \
-      --add-flags "-I $out/libexec/bub-vm.py" \
+      --add-flags "-I $out/libexec/bub_vm/__main__.py" \
       --prefix PATH : ${lib.makeBinPath runtimeInputs} \
       --set BUB_VM_CONFIG ${config}
   ''
