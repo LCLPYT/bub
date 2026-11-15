@@ -88,6 +88,10 @@ A base set of packages (curl, fd, git, jq, ripgrep, ...) is added to `environmen
 
 - Hypervisor: `vfkit` on macOS hosts, `qemu` otherwise.
 - 4 vCPUs and 4096 MiB memory by default (`lib.mkDefault`, so modules can override them).
+- On QEMU, `microvm.balloon` is enabled by default. It adds a virtio-balloon device with free page reporting, so
+  memory freed in the guest is returned to the host after a few seconds (the guest reports free 2 MiB blocks and
+  QEMU punches holes into the shared memfd backing guest RAM). vfkit doesn't support ballooning. Page cache counts
+  as used memory, so it is not returned until the guest drops it.
 - No control socket, fixed machine id (`lib.mkDefault`, like `system.stateVersion` and the host name).
 - One static share: the host `/nix/store`, mounted read-only at `/nix/.ro-store`.
 - One volume: `root.img` with label `bub-root`, mounted at `/` with size `bub.diskSize`. The image is created

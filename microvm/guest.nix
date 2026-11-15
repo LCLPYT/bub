@@ -185,6 +185,8 @@ in
       vmHostPackages = hostPkgs;
       vcpu = lib.mkDefault 4;
       mem = lib.mkDefault 4096;
+      # Free page reporting hands memory the guest no longer uses back to the host. vfkit has no balloon support.
+      balloon = lib.mkDefault (!isDarwinHost);
       socket = null;
       machineId = lib.mkDefault "6f1c4b7e-2d1a-4c55-9a3e-8b0d2f7e4a10";
 

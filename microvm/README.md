@@ -367,5 +367,4 @@ Using virtiofs is crucial for this setup, so the following hypervisors are chose
 - The guest user has the same UID as the host user (`bub.uid`, default 1000 on Linux, 501 on macOS), so files created in the project keep the right owner.
 
 ## Future improvements
-- Ballooning (+ free page reporting): free memory allocated by the vm when not needed
 - Cleanup of stale VM disks
