@@ -154,3 +154,4 @@ Using virtiofs is crucial for this setup, so the following hypervisors are chose
 
 ## Future improvements
 - Ballooning (+ free page reporting): free memory allocated by the vm when not needed
+- Cleanup of stale VM disks

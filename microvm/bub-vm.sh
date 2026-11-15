@@ -65,29 +65,42 @@ setup_state() {
   chmod 700 "$STATE" "$META"
   printf '%s\n' "$WORKDIR" >"$STATE/workdir"
   printf '%s\n' "$WORKDIR" >"$META/workdir"
+
+  # generate a keypair for this session
   [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N '' -C bub-vm -f "$KEY"
+
   install -m 600 "$KEY.pub" "$META/authorized_keys"
 }
 
 collect_shares() {
   local tag src
+
   SHARES=("work"$'\t'"$WORKDIR" "meta"$'\t'"$META")
+
   while IFS=$'\t' read -r tag src; do
     [ -n "$tag" ] || continue
+
     case "$src" in
       "~") src=$HOME ;;
       "~"/*) src=$HOME/${src#"~/"} ;;
     esac
+
     mkdir -p "$src"
+
     src=$(cd "$src" && pwd -P)
+
     check_path "share $tag" "$src"
+
     SHARES+=("$tag"$'\t'"$src")
   done <<<"$BUB_HOME_SHARES"
 }
 
+# Having a flake.lock in the directory where this script is run will build the system and run that dev shell in the guest.
+# For security, ask for confirmation since this could be used as an attack vector as the cwd is writable from the guest.
 flake_hash() {
   (
     cd "$WORKDIR"
+
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       git ls-files -z --cached --others --exclude-standard -- '*.nix' 'flake.lock' |
         sort -z | { xargs -0 -r sha256sum 2>/dev/null || true; }
@@ -100,16 +113,21 @@ flake_hash() {
 approve_flake() {
   local hash approved answer
   hash=$(flake_hash)
+
   approved=$(cat "$STATE/devshell.approved" 2>/dev/null || true)
+
   [ "$hash" != "$approved" ] || return 0
 
   if [ ! -t 0 ] || [ ! -t 2 ]; then
     log "the Nix files of this project are not approved, skipping the devShell (run bub-vm interactively to approve)"
     return 1
   fi
+
   log "the Nix files of this project changed since they were last approved (or were never approved)."
   log "loading the devShell evaluates and builds them on the host, outside of the VM."
+
   read -r -p "[bub-vm] load the devShell of $WORKDIR? [y/N] " answer || answer=""
+
   case "$answer" in
     y | Y | yes) printf '%s\n' "$hash" >"$STATE/devshell.approved" ;;
     *) return 1 ;;
@@ -118,15 +136,18 @@ approve_flake() {
 
 prepare_devshell() {
   local attr installable
+
   if [ "${BUB_DEVSHELL:-1}" != 1 ] || [ ! -f "$WORKDIR/flake.nix" ]; then
     rm -f "$META/devenv.sh"
     return 0
   fi
+
   if ! command -v nix >/dev/null; then
     log "nix not found on the host, skipping the devShell"
     rm -f "$META/devenv.sh"
     return 0
   fi
+
   if ! approve_flake; then
     rm -f "$META/devenv.sh"
     return 0
@@ -135,6 +156,7 @@ prepare_devshell() {
   attr=$("${NIX[@]}" eval --raw "$WORKDIR#devShells.$BUB_GUEST_SYSTEM" \
     --apply 'shells: if shells ? bub then "bub" else if shells ? default then "default" else ""' \
     2>/dev/null || true)
+
   if [ -z "$attr" ]; then
     log "no devShells.$BUB_GUEST_SYSTEM.{bub,default} found (or the flake failed to evaluate), skipping the devShell"
     rm -f "$META/devenv.sh"
@@ -142,7 +164,9 @@ prepare_devshell() {
   fi
 
   installable="$WORKDIR#devShells.$BUB_GUEST_SYSTEM.$attr"
+
   log "loading $installable"
+
   if "${NIX[@]}" print-dev-env --profile "$STATE/devshell" "$installable" >"$META/devenv.sh.tmp"; then
     mv "$META/devenv.sh.tmp" "$META/devenv.sh"
   else
@@ -151,8 +175,10 @@ prepare_devshell() {
   fi
 }
 
-# Starts a command in a new session, so terminal signals (Ctrl-C, hangup) don't reach it,
-# and prints its pid. The command runs in the state dir, which microvm.nix expects for relative paths.
+# Starts a command in a new session, so terminal signals (Ctrl-C, hangup) don't reach it, and prints its pid. 
+# The command runs in the state dir, which microvm.nix expects for relative paths.
+# perl is used instead of setsid(1), which is missing on macOS and may fork, so $! would not be the pid of the
+# command. exec keeps the pid and runs the command without a shell.
 detach() {
   local logfile=$1
   shift
@@ -166,13 +192,16 @@ detach() {
 
 vm_running() {
   local pid
+
   pid=$(cat "$STATE/vm.pid" 2>/dev/null) || return 1
+
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 start_virtiofsd() {
   local tag=$1 src=$2
   shift 2
+
   detach virtiofsd.log virtiofsd "--socket-path=virtiofs-$tag.sock" "--shared-dir=$src" \
     --sandbox=none --cache=auto "$@" >>"$STATE/virtiofsd.pids"
 }
@@ -188,20 +217,26 @@ start_vm() {
   case "$BUB_HYPERVISOR" in
     qemu)
       start_virtiofsd ro-store /nix/store --readonly
+
       sockets+=(virtiofs-ro-store.sock)
+
       args+=(
         -netdev "user,id=bubnet"
         -device "virtio-net-pci,netdev=bubnet,mac=$MAC"
         -device "vhost-vsock-pci,guest-cid=$CID"
       )
+
       for entry in "${SHARES[@]}"; do
         IFS=$'\t' read -r tag src <<<"$entry"
+
         if [ "$tag" = meta ]; then
           start_virtiofsd "$tag" "$src" --readonly
         else
           start_virtiofsd "$tag" "$src"
         fi
+
         sockets+=("virtiofs-$tag.sock")
+
         args+=(
           -chardev "socket,id=bub-$tag,path=virtiofs-$tag.sock"
           -device "vhost-user-fs-pci,chardev=bub-$tag,tag=$tag"
@@ -210,12 +245,16 @@ start_vm() {
 
       for ((i = 0; i < 100; i++)); do
         missing=0
+
         for entry in "${sockets[@]}"; do
           [ -S "$STATE/$entry" ] || missing=1
         done
+
         [ "$missing" = 1 ] || break
+
         sleep 0.05
       done
+
       [ "$missing" = 0 ] || die "virtiofsd did not start, see $STATE/virtiofsd.log"
       ;;
     vfkit)
@@ -223,8 +262,10 @@ start_vm() {
         --device "virtio-net,nat,mac=$MAC"
         --device "virtio-vsock,port=22,socketURL=$STATE/ssh.sock,connect"
       )
+
       for entry in "${SHARES[@]}"; do
         IFS=$'\t' read -r tag src <<<"$entry"
+
         args+=(--device "virtio-fs,sharedDir=$src,mountTag=$tag")
       done
       ;;
@@ -234,7 +275,9 @@ start_vm() {
   esac
 
   export BUB_HYPERVISOR_ARGS="${args[*]}"
+
   detach vm.log "$BUB_RUNNER/bin/microvm-run" >"$STATE/vm.pid"
+
   printf '%s\n' "$BUB_RUNNER" >"$STATE/vm.runner"
 }
 
@@ -268,38 +311,50 @@ wait_ssh() {
     if vm_ssh -T -o ConnectTimeout=2 bub-vm true </dev/null >/dev/null 2>&1; then
       return 0
     fi
+
     if ! vm_running; then
       log "the VM exited, last console output:"
       tail -n 40 "$STATE/vm.log" "$STATE/serial.log" >&2 2>/dev/null || true
       exit 1
     fi
+
     sleep 0.3
   done
+
   die "the VM did not become reachable, see 'bub-vm --log'"
 }
 
 stop_vm() {
   local pid i
+
   vm_running || return 0
+
   pid=$(cat "$STATE/vm.pid")
 
   log "stopping VM"
+
   vm_ssh -T -o ConnectTimeout=5 bub-vm /run/wrappers/bin/sudo /run/current-system/sw/bin/systemctl poweroff \
     </dev/null >/dev/null 2>&1 || true
+
   for ((i = 0; i < 100; i++)); do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.3
   done
+
   if kill -0 "$pid" 2>/dev/null; then
     log "the VM did not shut down, terminating it"
+
     kill "$pid" 2>/dev/null || true
+
     sleep 2
+
     kill -9 "$pid" 2>/dev/null || true
   fi
 
   if [ -f "$STATE/virtiofsd.pids" ]; then
     xargs kill <"$STATE/virtiofsd.pids" 2>/dev/null || true
   fi
+
   rm -f "$STATE/vm.pid" "$STATE/virtiofsd.pids" "$STATE"/*.sock
 }
 
@@ -311,12 +366,17 @@ lock_start() {
 # shellcheck disable=SC2329
 finish() {
   trap - EXIT
+
   flock -u 9 2>/dev/null || true
+
   [ "${BUB_KEEP_RUNNING:-0}" != 1 ] || return 0
+
   flock 8
+
   if flock -xn 9; then
     stop_vm
   fi
+
   flock -u 8 || true
 }
 
@@ -333,6 +393,7 @@ case "${1:-}" in
     ;;
   --destroy)
     [ -d "$STATE" ] || die "there is no VM for $WORKDIR"
+
     if [ -t 0 ]; then
       read -r -p "[bub-vm] delete the VM disk and state of $WORKDIR? [y/N] " answer || answer=""
       case "$answer" in
@@ -340,6 +401,7 @@ case "${1:-}" in
         *) exit 1 ;;
       esac
     fi
+
     lock_start
     stop_vm
     rm -rf "$STATE"
@@ -383,16 +445,21 @@ trap 'exit 143' TERM
 wait_ssh
 
 remote=/run/current-system/sw/bin/bub-session
+
 if [ $# -gt 0 ]; then
   remote+=" $(printf '%q ' "$@")"
 fi
+
 tty_flag=-T
+
 if [ -t 0 ] && [ -t 1 ]; then
   tty_flag=-t
 fi
 
 set +e
+
 vm_ssh "$tty_flag" -o "SetEnv=COLORTERM=${COLORTERM:-}" bub-vm "$remote"
+
 rc=$?
 set -e
 exit "$rc"
