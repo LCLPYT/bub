@@ -1,11 +1,12 @@
-"""Managing the VMs of all projects: listing them and deleting the ones that are no longer used."""
+"""Managing the VMs of all projects: listing them and deleting specific or unused ones."""
 import fcntl
 import os
 import shutil
 import sys
 
 from .state import State
-from .util import confirm, die, log, try_lock
+from .util import confirm, die, log, open_lock, try_lock
+from .vm import Vm
 
 
 def human_size(size):
@@ -88,6 +89,83 @@ def delete(state, older_than):
     return True
 
 
+def confirm_delete(question, assume_yes):
+    if assume_yes:
+        return True
+
+    if not sys.stdin.isatty():
+        die("refusing to delete VMs without a tty, pass --yes")
+
+    return confirm(question)
+
+
+def resolve(target):
+    """Finds a VM by its hash, a unique prefix of it or its project path."""
+    if "/" in target or target in (".", ".."):
+        state = State.for_workdir(os.path.realpath(target))
+
+        if not state.exists():
+            die(f"there is no VM for {os.path.realpath(target)}")
+
+        return state
+
+    found = [state for state in State.all() if state.digest.startswith(target.lower())]
+
+    if not found:
+        die(f"there is no VM {target}, see 'bub-vm --list'")
+
+    if len(found) > 1:
+        die(f"{target} matches more than one VM: {', '.join(state.digest for state in found)}")
+
+    return found[0]
+
+
+def remove(args, load_config):
+    assume_yes = False
+    targets = []
+
+    for arg in args:
+        if arg in ("-y", "--yes"):
+            assume_yes = True
+        elif arg.startswith("-"):
+            die(f"unknown argument for --remove: {arg}")
+        else:
+            targets.append(arg)
+
+    if not targets:
+        die("usage: bub-vm --remove VM... [--yes], where VM is a hash from 'bub-vm --list' or a project path")
+
+    states = list({state.digest: state for state in map(resolve, targets)}.values())
+    candidates = [(state, state.disk_usage(), state.in_use()) for state in states]
+    total = sum(size for _, size, _ in candidates)
+
+    for state, size, running in candidates:
+        status = "running" if running else "stopped"
+        print(f"{state.digest}  {status}  {human_size(size):>7}  {human_age(state.age_days()):>8}  {describe(state)}")
+
+    question = f"delete {'this VM' if len(candidates) == 1 else f'these {len(candidates)} VMs'} " \
+               f"and free {human_size(total)}?"
+
+    if any(running for *_, running in candidates):
+        question = f"stop and {question}"
+
+    if not confirm_delete(question, assume_yes):
+        return 1
+
+    config = None
+
+    for state, _, _ in candidates:
+        with open_lock(state / "start.lock", fcntl.LOCK_EX):
+            if state.in_use():
+                config = config or load_config()
+                Vm(config, state.workdir(), state).stop()
+
+            shutil.rmtree(state.path)
+
+    log(f"freed {human_size(total)}")
+    return 0
+
+
 def gc(args):
     older_than = None
     assume_yes = False
@@ -111,11 +189,8 @@ def gc(args):
     for state, size in candidates:
         print(f"{state.digest}  {human_size(size):>7}  {human_age(state.age_days()):>8}  {describe(state)}")
 
-    if not assume_yes:
-        if not sys.stdin.isatty():
-            die("refusing to delete VMs without a tty, pass --yes")
-        if not confirm(f"delete these {len(candidates)} VMs and free {human_size(total)}?"):
-            return 1
+    if not confirm_delete(f"delete these {len(candidates)} VMs and free {human_size(total)}?", assume_yes):
+        return 1
 
     freed = sum(size for state, size in candidates if delete(state, older_than))
     log(f"freed {human_size(freed)}")

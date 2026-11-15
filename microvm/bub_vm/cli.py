@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .manage import gc, list_vms
+from .manage import gc, list_vms, remove
 from .session import run_session
 from .util import confirm, die, open_lock
 from .vm import Vm
@@ -17,6 +17,9 @@ Usage: bub-vm [program [args...]]  run a program (default: bash) in the VM of th
        bub-vm --destroy            stop the VM and delete its disk and state
        bub-vm --log                print the console log of the VM
        bub-vm --list               list the VMs of all projects with their disk usage
+       bub-vm --remove VM... [--yes]
+                                   delete VMs by hash (or a unique prefix, see --list) or project path,
+                                   running ones are stopped first
        bub-vm --gc [--older-than DAYS] [--yes]
                                    delete stopped VMs whose project directory no longer exists,
                                    and with --older-than also those not used for DAYS days
@@ -55,6 +58,15 @@ def print_log(vm):
     return 0
 
 
+def load_config():
+    config_path = os.environ.get("BUB_VM_CONFIG")
+
+    if not config_path:
+        die("BUB_VM_CONFIG is not set")
+
+    return json.loads(Path(config_path).read_text())
+
+
 def main(args):
     first = args[0] if args else ""
     if first in ("-h", "--help"):
@@ -64,11 +76,10 @@ def main(args):
         return list_vms()
     if first == "--gc":
         return gc(args[1:])
+    if first == "--remove":
+        return remove(args[1:], load_config)
 
-    config_path = os.environ.get("BUB_VM_CONFIG")
-    if not config_path:
-        die("BUB_VM_CONFIG is not set")
-    vm = Vm(json.loads(Path(config_path).read_text()), os.getcwd())
+    vm = Vm(load_config(), os.getcwd())
 
     commands = {"--stop": stop, "--destroy": destroy, "--log": print_log}
     if first in commands:

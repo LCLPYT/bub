@@ -16,13 +16,13 @@ GUEST_GID = 100
 
 
 class Vm:
-    def __init__(self, config, workdir):
+    def __init__(self, config, workdir, state=None):
         self.config = config
         self.hypervisor = config["hypervisor"]
         self.runner = config["runner"]
         self.home = os.environ["HOME"]
         self.workdir = workdir
-        self.state = State.for_workdir(workdir)
+        self.state = state or State.for_workdir(workdir)
 
         # Processes started by this invocation. Once they exit they stay zombies until reaped,
         # so a plain kill(pid, 0) would still report them as running.

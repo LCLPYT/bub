@@ -285,6 +285,7 @@ bub-vm --stop        # stop the VM of this directory
 bub-vm --destroy     # delete the VM disk of this directory
 bub-vm --log         # console output
 bub-vm --list        # all VMs with their project, status, last use and disk usage
+bub-vm --remove 8c66 # delete a VM by (a prefix of) its hash or by its project path, asks first
 bub-vm --gc          # delete VMs whose project directory no longer exists
 bub-vm --gc --older-than 30   # ... and VMs not used for 30 days
 ```

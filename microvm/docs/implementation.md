@@ -165,7 +165,7 @@ The command executed for every SSH session:
 | `devshell.py` | Approving and building the devShell.                                             |
 | `ssh.py`      | The isolated ssh invocation.                                                     |
 | `session.py`  | Running a session, signal forwarding and the session locks.                      |
-| `manage.py`   | `--list` and `--gc` over the state directories of all projects.                  |
+| `manage.py`   | `--list`, `--remove` and `--gc` over the state directories of all projects.      |
 | `util.py`     | Logging, path matching, file, process and lock helpers.                          |
 
 ### Commands
@@ -177,6 +177,7 @@ The command executed for every SSH session:
 | `bub-vm --destroy`     | Stop the VM and delete its state directory, asks on a tty.       |
 | `bub-vm --log`         | Print `vm.log` and `serial.log`.                                 |
 | `bub-vm --list`        | List the VMs of all projects, see [Managing VMs](#managing-vms). |
+| `bub-vm --remove VM... [--yes]` | Delete specific VMs, see [Managing VMs](#managing-vms). |
 | `bub-vm --gc [--older-than DAYS] [--yes]` | Delete unused VMs, see [Managing VMs](#managing-vms). |
 
 Environment variables: `BUB_DEVSHELL` (`0` or `1`) and `BUB_KEEP_RUNNING` (`0` or `1`) override
@@ -316,7 +317,7 @@ with code 130, `HUP` and `TERM` with 129 and 143, and `finish` runs in all cases
 
 ### Managing VMs
 
-`--list` and `--gc` don't need `BUB_VM_CONFIG` and work on every directory under the state root whose name is a
+`--list`, `--remove` and `--gc` don't need `BUB_VM_CONFIG` (`--remove` only to stop a running VM) and work on every directory under the state root whose name is a
 12 digit hex hash. For each of them:
 
 - The project is read from `workdir`. It counts as missing if the file is absent or the directory doesn't exist.
@@ -329,3 +330,8 @@ with code 130, `HUP` and `TERM` with 129 and 143, and `finish` runs in all cases
 `--older-than DAYS`, that were last used more than `DAYS` days ago. It lists them and asks for confirmation,
 which `--yes` skips. Without a tty `--yes` is required. Each directory is deleted while holding `start.lock`
 (directories whose lock is held are skipped), after checking again that it is still unused.
+
+`--remove` takes one or more VMs, each given as a hash, a unique prefix of one, or a project path (anything with a
+`/`, or `.`/`..`, which is resolved to a physical path and hashed, so it also works after the project was deleted).
+It lists them and asks for confirmation (`--yes` skips it and is required without a tty). Each VM is then deleted
+while holding `start.lock`, and running VMs are stopped first like with `--destroy`.
