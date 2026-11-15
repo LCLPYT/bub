@@ -289,6 +289,63 @@ Nix itself is not available inside the VM by default, see [Nix inside the VM](#e
 
 The nix flake utilizes [microvm.nix](https://github.com/microvm-nix/microvm.nix) in order to setup the micro vms.
 
+```mermaid
+flowchart TB
+  subgraph build["Build time (Nix on the host)"]
+    direction TB
+    userMods["user modules<br/>mkBub { modules }"]
+    guestNix["guest.nix<br/>nixosModules.default"]
+    microvmMod["microvm.nix<br/>nixosModules.microvm"]
+    mkVm["lib.mkVm<br/>nixosSystem for the guest system"]
+    runner["microvm.declaredRunner<br/>QEMU or vfkit runner"]
+    wrapper["wrapper.nix<br/>bub-vm-config.json"]
+    bubVm["bub-vm<br/>bub-vm.py"]
+
+    userMods --> mkVm
+    guestNix --> mkVm
+    microvmMod --> mkVm
+    mkVm --> runner --> wrapper
+    mkVm -- "bub.* options" --> wrapper
+    wrapper --> bubVm
+  end
+
+  subgraph host["Runtime: host"]
+    direction TB
+    store[("/nix/store")]
+    project[("project dir")]
+    shareSrc[("bub.shares sources")]
+    state[("~/.local/state/bub-vm/&lt;hash&gt;<br/>root.img, meta/, ssh key")]
+    devShell["project devShell<br/>nix print-dev-env"]
+    virtiofsd["virtiofsd per share<br/>(Linux only)"]
+    hypervisor["hypervisor<br/>QEMU (KVM) / vfkit"]
+  end
+
+  subgraph guest["Runtime: NixOS guest"]
+    direction TB
+    roStore["/nix/.ro-store"]
+    metaMount["/run/bub/meta"]
+    mounts["bub-mounts.service<br/>project at host path, shares at targets"]
+    sshd["sshd on vsock::22"]
+    session["bub-session<br/>loads devenv.sh, runs command"]
+  end
+
+  bubVm --> devShell -- "devenv.sh" --> state
+  bubVm --> virtiofsd
+  bubVm -- "BUB_HYPERVISOR_ARGS" --> hypervisor
+  bubVm -- "ssh over vsock" --> sshd
+  store --> virtiofsd
+  project --> virtiofsd
+  shareSrc --> virtiofsd
+  state --> virtiofsd
+  state -- "root disk" --> hypervisor
+  virtiofsd --> hypervisor
+  hypervisor --> roStore
+  hypervisor --> metaMount
+  metaMount --> mounts
+  hypervisor --> mounts
+  sshd --> session
+```
+
 Using virtiofs is crucial for this setup, so the following hypervisors are chosen:
 
 | Host             | Hypervisor | Guest           |
