@@ -45,7 +45,7 @@ let
     fi
 
     if [ $# -eq 0 ]; then
-      exec bash -i
+      exec ${lib.getExe pkgs.bashInteractive} -i
     fi
     exec "$@"
   '';
