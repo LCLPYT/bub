@@ -177,6 +177,71 @@ Podman is not enabled by default. Rootless Podman works out of the box with:
 })
 ```
 
+### Example: Nix inside the VM
+
+Nix is disabled in the guest by default. It can be enabled with a writable store overlay:
+
+```nix
+({ config, lib, ... }: {
+  nix.enable = lib.mkForce true;
+  nix.settings = {
+    experimental-features = [ "nix-command" "flakes" ];
+    trusted-users = [ config.bub.user ];
+    # /tmp is a tmpfs, build on the root disk instead
+    build-dir = "/var/tmp/nix-build";
+  };
+  systemd.tmpfiles.rules = [ "d /var/tmp/nix-build 0755 root root -" ];
+
+  microvm.writableStoreOverlay = "/nix/.rw-store";
+
+  # store paths built in the VM live on the per-project root disk
+  bub.diskSize = 64 * 1024;
+})
+```
+
+The host store stays read-only: it is mounted at `/nix/.ro-store` and covered by an overlayfs whose upper layer is on
+the per-project root disk, so builds inside the VM can't write to the host store. On macOS the read-only mount is only
+enforced inside the guest (see [Shares](#shares)). Don't share the host nix-daemon socket into the VM, as that would
+let the VM add arbitrary paths to the host store.
+
+Only the closure of the guest system is registered in the Nix database of the VM. Other host store paths (e.g. from
+the devShell) are visible, but Nix in the VM treats them as missing and builds or downloads them again.
+
+### Example: Nested virtualization (QEMU / NixOS tests)
+
+To run QEMU with KVM inside the VM, e.g. for `nixosTest` checks or `system.build.vm`, nested virtualization has to be
+enabled on the host:
+
+```bash
+cat /sys/module/kvm_intel/parameters/nested   # or kvm_amd, should print Y or 1
+```
+
+If it is disabled, enable it on the host (`options kvm_intel nested=1` in `/etc/modprobe.d/kvm.conf`, or
+`boot.extraModprobeConfig` on NixOS) and reload the module.
+
+In the guest, load the KVM module and give the user access to `/dev/kvm`:
+
+```nix
+({ config, pkgs, ... }: {
+  boot.kernelModules = [ "kvm-intel" ]; # or "kvm-amd"
+  users.users.${config.bub.user}.extraGroups = [ "kvm" ];
+
+  environment.systemPackages = [ pkgs.qemu_kvm ];
+
+  # nested VMs need resources
+  microvm.mem = 16384;
+  microvm.vcpu = 8;
+})
+```
+
+Check with `ls -l /dev/kvm` and `grep -cE 'vmx|svm' /proc/cpuinfo` in the VM. Combined with
+[Nix inside the VM](#example-nix-inside-the-vm), the nix-daemon picks up the `kvm` system feature, so NixOS tests can
+run with `nix build .#checks.<system>.<test>` or interactively via `.driverInteractive`.
+
+Nested virtualization on `aarch64-linux` needs hardware support and `kvm-arm.mode=nested` on the host kernel.
+On macOS, nested virtualization requires an M3 or newer and macOS 15. Without KVM, QEMU falls back to slow software
+emulation.
+
 ### Options
 
 | Option                | Default                         | Description                                                        |
@@ -218,7 +283,7 @@ on the host (inside the Nix build sandbox on Linux, which is off by default on m
 confirmation whenever the `*.nix` files or `flake.lock` change. Import from derivation and flake `nixConfig` are
 disabled. Set `bub.devShell.enable = false` or `BUB_DEVSHELL=0` to skip the devShell.
 
-Nix itself is not available inside the VM.
+Nix itself is not available inside the VM by default, see [Nix inside the VM](#example-nix-inside-the-vm).
 
 ## How it works
 
