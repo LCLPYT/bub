@@ -135,7 +135,8 @@ inputs.bub-vm = {
 };
 ```
 
-Then, you can use the builtin function `mkBub` to create a package for your system / home manager packages.
+Then, you can use the library function `lib.mkBub` to create a package for your system (`environment.systemPackages`) or Home Manager (`home.packages`).
+The example assumes `inputs` is passed to your modules, e.g. via `specialArgs = { inherit inputs; };`.
 
 ```nix
 environment.systemPackages = [
@@ -176,6 +177,7 @@ You can write a small flake to customize the vm config and install it as profile
     };
   };
 
+  # replace x86_64-linux with your system, e.g. aarch64-linux or aarch64-darwin
   outputs = { bub-vm, ... }: {
     packages.x86_64-linux.default = bub-vm.lib.mkBub {
       system = "x86_64-linux";
@@ -193,10 +195,12 @@ You can write a small flake to customize the vm config and install it as profile
 Then:
 
 ```bash
-nix profile install ~/.config/bub-vm               # first install
+nix profile add ~/.config/bub-vm                   # first install (`nix profile install` on older Nix)
 nix flake update --flake ~/.config/bub-vm          # bump bub/nixpkgs
 nix profile upgrade --all                          # rebuild after editing or updating
 ```
+
+If `~/.config` is a git repository, `git add` the flake, otherwise Nix won't see it.
 
 ## Usage
 
@@ -237,7 +241,8 @@ bub.shares = {
 };
 ```
 
-Targets can't be system directories (`/etc`, `/nix`, `/run`, ...) or the home directory itself, and two shares can't use the same target. 
+Targets can't be system directories (`/etc`, `/nix`, `/run`, ...) or the home directory itself, and two shares can't use the same target.
+Share names may only contain letters, digits, `_` and `-` and must be at most 34 characters long.
 
 > [!NOTE]
 > MacOS doesn't truly support `readOnly = true` shares.
