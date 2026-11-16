@@ -71,6 +71,7 @@ standard library. The build byte-compiles it, so syntax errors fail the build.
 | `bub.shares`      | `{ }`                           | Host directories mounted into the VM (alias `bub.homeShares`). |
 | `bub.network.enable` | `true`                       | NAT network interface.                                         |
 | `bub.sudo.enable` | `true`                          | Passwordless sudo for the VM user.                             |
+| `bub.nestedVirtualization.enable` | `false`         | `--nested` for vfkit, VM user in `kvm`.                        |
 | `bub.keepRunning` | `false`                         | Default for `BUB_KEEP_RUNNING`.                                |
 | `bub.devShell.enable` | `true`                      | Default for `BUB_DEVSHELL`.                                    |
 | `bub.forwardEnv`  | `[ "COLORTERM" ]`               | Variables sent by ssh (`SendEnv`) and accepted by sshd.        |
@@ -101,7 +102,9 @@ A base set of packages (curl, fd, git, jq, ripgrep, ...) is added to `environmen
   how project specific devices are added at runtime.
 - On macOS, vfkit is wrapped: vfkit puts stdin into raw mode for `virtio-serial,stdio` and fails without a tty,
   which is the case once the VM runs in the background. The wrapper replaces that argument with
-  `virtio-serial,logFilePath=$PWD/serial.log`.
+  `virtio-serial,logFilePath=$PWD/serial.log`. With `bub.nestedVirtualization.enable` it also passes `--nested`,
+  as microvm.nix has no option for it. On QEMU, microvm.nix already uses `-cpu host`, so the guest gets VMX/SVM
+  whenever the host KVM module allows nesting.
 
 ### System
 
@@ -113,6 +116,7 @@ A base set of packages (curl, fd, git, jq, ripgrep, ...) is added to `environmen
 - Users are immutable. The VM user has the configured UID and subuid and subgid ranges for rootless containers.
   NixOS only allows UIDs >= 1000 for normal users, so UIDs below 1000 (macOS hosts) make it a system user instead,
   which is also why the ranges are set explicitly.
+- With `bub.nestedVirtualization.enable` the user is in `kvm`.
 - With `bub.sudo.enable` the user is in `wheel` (passwordless sudo). A sudo rule always allows
   `systemctl poweroff`, which bub-vm uses to stop the VM.
 - Podman is not enabled, see the README for an example.

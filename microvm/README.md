@@ -226,8 +226,11 @@ for the Nix store, see above.
 
 ### Example: Nested virtualization (QEMU / NixOS tests)
 
-To run QEMU with KVM inside the VM, e.g. for `nixosTest` checks or `system.build.vm`, nested virtualization has to be
-enabled on the host:
+To run QEMU with KVM inside the VM, e.g. for `nixosTest` checks or `system.build.vm`, enable
+`bub.nestedVirtualization.enable`. It gives the VM user access to `/dev/kvm` and, on macOS, starts vfkit with
+`--nested`.
+
+On Linux hosts, nested virtualization also has to be enabled in the KVM module of the host:
 
 ```bash
 cat /sys/module/kvm_intel/parameters/nested   # or kvm_amd, should print Y or 1
@@ -236,14 +239,12 @@ cat /sys/module/kvm_intel/parameters/nested   # or kvm_amd, should print Y or 1
 If it is disabled, enable it on the host (`options kvm_intel nested=1` in `/etc/modprobe.d/kvm.conf`, or
 `boot.extraModprobeConfig` on NixOS) and reload the module.
 
-In the guest, load the KVM module and give the user access to `/dev/kvm`:
-
 ```nix
-({ config, pkgs, ... }: {
-  boot.kernelModules = [ "kvm-intel" ]; # or "kvm-amd"
-  users.users.${config.bub.user}.extraGroups = [ "kvm" ];
+({ pkgs, ... }: {
+  bub.nestedVirtualization.enable = true;
 
-  environment.systemPackages = [ pkgs.qemu_kvm ];
+  # x86_64 guests only, the aarch64 kernel has KVM built in
+  boot.kernelModules = [ "kvm-intel" ]; # or "kvm-amd"
 
   # nested VMs need resources
   microvm.mem = 16384;
@@ -256,7 +257,8 @@ Check with `ls -l /dev/kvm` and `grep -cE 'vmx|svm' /proc/cpuinfo` in the VM. Co
 run with `nix build .#checks.<system>.<test>` or interactively via `.driverInteractive`.
 
 Nested virtualization on `aarch64-linux` needs hardware support and `kvm-arm.mode=nested` on the host kernel.
-On macOS, nested virtualization requires an M3 or newer and macOS 15. Without KVM, QEMU falls back to slow software
+On macOS, nested virtualization requires an M3 or newer and macOS 15. Otherwise vfkit refuses to start with
+`nested virtualization is not supported` (see `bub-vm --log`). Without KVM, QEMU falls back to slow software
 emulation.
 
 ### Options
@@ -269,6 +271,7 @@ emulation.
 | `bub.shares`          | `{ }`                           | Host directories mounted into the VM, see [Shares](#shares).       |
 | `bub.network.enable`  | `true`                          | NAT network with access to the host network and the internet.      |
 | `bub.sudo.enable`     | `true`                          | Passwordless sudo for the VM user.                                 |
+| `bub.nestedVirtualization.enable` | `false`             | KVM inside the VM, see [Nested virtualization](#example-nested-virtualization-qemu--nixos-tests). |
 | `bub.keepRunning`     | `false`                         | Keep the VM running after the last session (`BUB_KEEP_RUNNING`).   |
 | `bub.devShell.enable` | `true`                          | Load the devShell of the project flake (`BUB_DEVSHELL`).           |
 | `bub.forwardEnv`      | `[ "COLORTERM" ]`               | Environment variables passed from the host to sessions.            |

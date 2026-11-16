@@ -14,8 +14,9 @@ let
 
   # vfkit puts stdin into raw mode for `virtio-serial,stdio` and fails when it is not a tty,
   # which is the case once the VM runs in the background. Log the console to a file instead.
+  # microvm.nix has no vfkit option for nested virtualization, so the wrapper adds `--nested` as well.
   vfkitWrapper = hostPkgs.writeShellScriptBin "vfkit" ''
-    args=()
+    args=(${lib.optionalString cfg.nestedVirtualization.enable "--nested"})
     for arg in "$@"; do
       if [ "$arg" = "virtio-serial,stdio" ]; then
         arg="virtio-serial,logFilePath=$PWD/serial.log"
@@ -148,6 +149,16 @@ in
       description = "Give the VM user passwordless sudo. Without it, the user may only run `systemctl poweroff` as root.";
     };
 
+    nestedVirtualization.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Make KVM available in the VM and give the VM user access to `/dev/kvm`. On macOS hosts, vfkit enables
+        nested virtualization, which needs an M3 or newer and macOS 15. On Linux hosts, nested virtualization has to
+        be enabled in the KVM module of the host.
+      '';
+    };
+
     keepRunning = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -239,7 +250,8 @@ in
       group = "users";
       createHome = true;
       useDefaultShell = true;
-      extraGroups = lib.optional cfg.sudo.enable "wheel";
+      extraGroups =
+        lib.optional cfg.sudo.enable "wheel" ++ lib.optional cfg.nestedVirtualization.enable "kvm";
       # For rootless containers. NixOS only allocates these automatically for normal users.
       subUidRanges = [
         {
