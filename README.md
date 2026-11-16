@@ -4,7 +4,7 @@ An easy to use, general purpose sandboxing setup using micro VMs via Nix.
 
 ## Prerequisites
 - Linux or macOS
-- Nix with flakes and commands enabled
+- Nix with the `nix-command` and `flakes` experimental features enabled
 
 > [!NOTE]
 > For macOS, only Apple Silicon is supported. You'll also need to set up a Linux builder.
@@ -15,8 +15,8 @@ An easy to use, general purpose sandboxing setup using micro VMs via Nix.
 nix run github:LCLPYT/bub -- bash
 ```
 
-This create a microVM running NixOS and open an interactive shell running `bash`.
-Learn more about how to [manage VMs](#manage-vms) created by bub further below.
+This creates a microVM running NixOS and opens an interactive shell running `bash`.
+Learn more about how to [manage VMs](#managing-vms) created by bub further below.
 
 ## Motivation
 
@@ -35,11 +35,11 @@ To spare me from this hassle, I turned to using VMs.
 My requirements were that I needed a setup which runs both on my Linux systems, as well as on macOS.
 I need to run Podman, Nix and QEMU inside the VM, but further extensions should be easily possible.
 
-This is why I decided that [microvm.nix](https://github.com/microvm-nix/microvm.nix) is the right tool for the Job.
+This is why I decided that [microvm.nix](https://github.com/microvm-nix/microvm.nix) is the right tool for the job.
 It only requires the Nix package manager, which is available for all major platforms.
 On top of that, Nix also offers a very large software repository with convenient ways to install new software and also per-project tools.
 
-For best performance, virtiofs and other virtio dirvers are required.
+For best performance, virtiofs and other virtio drivers are required.
 This is why the following hypervisors are chosen:
 
 | Host             | Hypervisor | Guest           |
@@ -50,8 +50,8 @@ This is why the following hypervisors are chosen:
 
 ## How it works
 
-This setup consists out of three major components:
-- Guest system build using Nix (on the host)
+This setup consists of three major components:
+- Guest system built using Nix (on the host)
 - Host system state (folder shares, vm state, disk)
 - Guest system (the running VMs)
 
@@ -113,11 +113,11 @@ flowchart TB
   sshd --> session
 ```
 
-Once you run the vm-script inside a folder, that folder will be mounted into a new VM with read/write permissions.
+Once you run `bub-vm` inside a folder, that folder will be mounted into a new VM with read/write permissions.
 Each working directory gets an individual VM, meaning you get easy isolation between your projects.
 VMs also get re-used after you restart them inside a folder.
 
-This also means that having many VMs consumes a bit more disk space, since each VM gets its own disk image in `.local/state/bub-vm`.
+This also means that having many VMs consumes a bit more disk space, since each VM gets its own disk image in `~/.local/state/bub-vm`.
 In order to save disk space, the VM images are created as sparse files.
 Should you want to delete VMs, please read [Managing VMs](#managing-vms).
 
@@ -126,7 +126,15 @@ Detailed implementation documentation is available [here](docs/implementation.md
 ## Installation
 
 ### Nix flake
-Add bub as an input to your nix flake.
+Add bub as an input to your nix flake:
+
+```nix
+inputs.bub-vm = {
+  url = "github:LCLPYT/bub";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
 Then, you can use the builtin function `mkBub` to create a package for your system / home manager packages.
 
 ```nix
@@ -157,7 +165,7 @@ environment.systemPackages = [
 ### Generic flake + profile (e.g. on non-NixOS systems)
 You can write a small flake to customize the vm config and install it as profile:
 
-```bash
+```nix
 # ~/.config/bub-vm/flake.nix
 {
   inputs = {
@@ -184,7 +192,7 @@ You can write a small flake to customize the vm config and install it as profile
 
 Then:
 
-```
+```bash
 nix profile install ~/.config/bub-vm               # first install
 nix flake update --flake ~/.config/bub-vm          # bump bub/nixpkgs
 nix profile upgrade --all                          # rebuild after editing or updating
@@ -294,16 +302,6 @@ Only the closure of the guest system is registered in the Nix database of the VM
 Builds run in the default `build-dir` (`/nix/var/nix/builds`), which is on the root disk.
 Don't point `build-dir` below a world-writable directory such as `/var/tmp`: Nix refuses that with: `Path "/var/tmp" is world-writable or a symlink`.
 
-## Disk usage
-
-Every project has its own root disk at `~/.local/state/bub-vm/<hash>/root.img`.
-If you have local state / cache in the VM, such as a `nodes_modules` folder or container image layers, they will potentially be duplicated if they are used in multiple VMs.
-
-The disk is a sparse file, so it only uses what has been written, but it grows up to `bub.diskSize` and doesn't necessarily shrink again when files are deleted in the VM. 
-
-A solution to that is to share such directories from the host with all the VMs using [`bub.shares`](#shares), e.g. for `~/.npm`. 
-Don't do this for the Nix store, see above.
-
 ### Example: Nested virtualization (QEMU / NixOS tests)
 
 To run QEMU with KVM inside the VM, e.g. for `nixosTest` checks or `system.build.vm`, enable `bub.nestedVirtualization.enable`. 
@@ -344,7 +342,7 @@ Without KVM, QEMU falls back to slow software emulation.
 | `bub.user`            | `bub`                           | Name of the user inside the VM.                                    |
 | `bub.uid`             | `501` on macOS, `1000` on Linux | UID of the VM user. Must match the host user.                      |
 | `bub.diskSize`        | `32768` (MiB)                   | Size of the sparse per-project root disk.                          |
-| `bub.shares`          | `{ }`                           | Host directories mounted into the VM, see [Shares](#shares).       |
+| `bub.shares`          | `{ }`                           | Host directories mounted into the VM, see [Directory shares](#directory-shares). |
 | `bub.network.enable`  | `true`                          | NAT network with access to the host network and the internet.      |
 | `bub.sudo.enable`     | `true`                          | Passwordless sudo for the VM user.                                 |
 | `bub.nestedVirtualization.enable` | `false`             | KVM inside the VM, see [Nested virtualization](#example-nested-virtualization-qemu--nixos-tests). |
@@ -355,7 +353,17 @@ Without KVM, QEMU falls back to slow software emulation.
 Packages are added with `environment.systemPackages`, and any other NixOS or microvm.nix option (e.g. `microvm.mem`,
 `microvm.vcpu`) can be set as well.
 
-## Usage
+## Disk usage
+
+Every project has its own root disk at `~/.local/state/bub-vm/<hash>/root.img`.
+If you have local state / cache in the VM, such as a `node_modules` folder or container image layers, they will potentially be duplicated if they are used in multiple VMs.
+
+The disk is a sparse file, so it only uses what has been written, but it grows up to `bub.diskSize` and doesn't necessarily shrink again when files are deleted in the VM. 
+
+A solution to that is to share such directories from the host with all the VMs using [`bub.shares`](#directory-shares), e.g. for `~/.npm`. 
+Don't do this for the Nix store, see [Nix inside the VM](#example-nix-inside-the-vm).
+
+## Managing VMs
 
 ```bash
 bub-vm claude        # run a program (needs to be installed in the guest)
@@ -382,3 +390,8 @@ bub-vm therefore asks for confirmation whenever the `*.nix` files or `flake.lock
 
 Set `bub.devShell.enable = false` or `BUB_DEVSHELL=0` to skip the devShell.
 
+## Other versions
+
+Before switching to microVMs, bub was a set of shell scripts. They are no longer maintained, but kept in [`archive/`](archive):
+- [`archive/bubblewrap`](archive/bubblewrap/README.md): Linux sandbox using [bubblewrap](https://github.com/containers/bubblewrap) namespaces and a [tinyproxy](https://github.com/tinyproxy/tinyproxy) allow list for network access.
+- [`archive/macos`](archive/macos/README.md): macOS sandbox using [Apple containers](https://github.com/apple/container).

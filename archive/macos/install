@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if [[ "$OSTYPE" != "darwin"* ]]; then
+  echo "error: this version only supports macOS, use ../bubblewrap/install instead" >&2
+  exit 1
+fi
+
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bub-sandbox"
+mkdir -p "$data_dir"
+install -m644 Containerfile "$data_dir"
+
+mkdir -p "$HOME/.local/bin"
+install -m755 bub "$HOME/.local/bin"

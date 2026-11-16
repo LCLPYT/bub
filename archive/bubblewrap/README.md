@@ -88,12 +88,7 @@ systemctl --user restart bub-tinyproxy
 
 ## Version for macOS
 MacOS doesn't use the Linux kernel and thus doesn't have the user namespaces feature.
-Since I need some sort of similar sandboxing on macOS as well, I've added a version built on [Apple containers](https://github.com/apple/container).
-
-This version still lacks the proxy; the VM uses host networking.
-
-Apple containers create a small VM for each container, so separation is even better than the bubblewrap version.
-This comes at a price, however: the VM doesn't have access to programs installed on the host; you'll need to adjust the `Containerfile` if you need additional programs.
+There is a separate version built on Apple containers, see [`../macos`](../macos/README.md).
 
 ## Acknowledgement
 This setup was based on [A detailed writeup of Claude Code constrained by Bubblewrap.](https://patrickmccanna.net/a-detailed-writeup-of-claude-code-constrained-by-bubblewrap/) by Patrick McCanna.
