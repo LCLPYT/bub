@@ -16,7 +16,7 @@ nix run github:LCLPYT/bub -- bash
 ```
 
 This creates a microVM running NixOS and opens an interactive shell running `bash`.
-Learn more about how to [manage VMs](#managing-vms) created by bub further below.
+Learn more about how to manage VMs in the [usage section](#usage).
 
 ## Motivation
 
@@ -119,7 +119,7 @@ VMs also get re-used after you restart them inside a folder.
 
 This also means that having many VMs consumes a bit more disk space, since each VM gets its own disk image in `~/.local/state/bub-vm`.
 In order to save disk space, the VM images are created as sparse files.
-Should you want to delete VMs, please read [Managing VMs](#managing-vms).
+Should you want to delete VMs, please read [Usage](#usage).
 
 Detailed implementation documentation is available [here](docs/implementation.md).
 
@@ -196,6 +196,20 @@ Then:
 nix profile install ~/.config/bub-vm               # first install
 nix flake update --flake ~/.config/bub-vm          # bump bub/nixpkgs
 nix profile upgrade --all                          # rebuild after editing or updating
+```
+
+## Usage
+
+```bash
+bub-vm claude        # run a program (needs to be installed in the guest)
+bub-vm               # interactive shell
+bub-vm --stop        # stop the VM of this directory
+bub-vm --destroy     # delete the VM disk of this directory
+bub-vm --log         # console output
+bub-vm --list        # all VMs with their project, status, last use and disk usage
+bub-vm --remove 8c66 # delete a VM by (a prefix of) its hash or by its project path, asks first
+bub-vm --gc          # delete VMs whose project directory no longer exists
+bub-vm --gc --older-than 30   # ... and VMs not used for 30 days
 ```
 
 ## Customization
@@ -362,20 +376,6 @@ The disk is a sparse file, so it only uses what has been written, but it grows u
 
 A solution to that is to share such directories from the host with all the VMs using [`bub.shares`](#directory-shares), e.g. for `~/.npm`. 
 Don't do this for the Nix store, see [Nix inside the VM](#example-nix-inside-the-vm).
-
-## Managing VMs
-
-```bash
-bub-vm claude        # run a program (needs to be installed in the guest)
-bub-vm               # interactive shell
-bub-vm --stop        # stop the VM of this directory
-bub-vm --destroy     # delete the VM disk of this directory
-bub-vm --log         # console output
-bub-vm --list        # all VMs with their project, status, last use and disk usage
-bub-vm --remove 8c66 # delete a VM by (a prefix of) its hash or by its project path, asks first
-bub-vm --gc          # delete VMs whose project directory no longer exists
-bub-vm --gc --older-than 30   # ... and VMs not used for 30 days
-```
 
 ## Project tools
 
