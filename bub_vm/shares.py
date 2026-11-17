@@ -47,10 +47,10 @@ def collect_shares(vm):
     shares = [("work", vm.workdir, False, vm.workdir), ("meta", str(vm.state.meta), True, None)]
 
     for share in vm.config["shares"]:
-        tag, source = share["tag"], share["source"]
+        tag, source = share["tag"], expand_home(vm, share["source"])
 
-        if source == "~" or source.startswith("~/"):
-            source = vm.home + source[1:]
+        if not share_applies(vm, share.get("when")):
+            continue
 
         os.makedirs(source, exist_ok=True)
 
@@ -58,7 +58,12 @@ def collect_shares(vm):
 
         check_path(f"share {tag}", source)
 
-        shares.append((tag, source, share["readOnly"], share_target(vm.config, tag, share["target"], source)))
+        target = share_target(vm.config, tag, share["target"], source)
+
+        if source == vm.workdir and target == vm.workdir:
+            continue
+
+        shares.append((tag, source, share["readOnly"], target))
 
     targets = [target for *_, target in shares if target is not None]
 
@@ -67,6 +72,32 @@ def collect_shares(vm):
             die(f"more than one share is mounted at {target}")
 
     return shares
+
+
+def expand_home(vm, path):
+    if path == "~" or path.startswith("~/"):
+        return vm.home + path[1:]
+    return path
+
+
+def share_applies(vm, when):
+    """`when` lists project path patterns, where a trailing `*` matches any suffix. None means always."""
+    if when is None:
+        return True
+
+    patterns = []
+
+    for pattern in when:
+        pattern = expand_home(vm, pattern)
+        wildcard = pattern.endswith("*")
+        base = pattern.rstrip("*")
+
+        if base.endswith("/") or not wildcard:
+            base = os.path.realpath(base) + ("/" if base.endswith("/") else "")
+
+        patterns.append(base + ("*" if wildcard else ""))
+
+    return matches(vm.workdir, patterns)
 
 
 def share_target(config, tag, target, source):

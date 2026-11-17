@@ -101,6 +101,16 @@ in
                   shares, so on macOS hosts it is only a read-only mount in the guest, which root can remount.
                 '';
               };
+              when = lib.mkOption {
+                type = lib.types.nullOr (lib.types.listOf lib.types.str);
+                default = null;
+                example = [ "~/src/*" ];
+                description = ''
+                  Only mount the share if the project directory matches one of these patterns.
+                  A leading `~` expands to the home directory of the host user and a trailing `*` matches any suffix.
+                  `null` mounts the share in every project.
+                '';
+              };
               tag = lib.mkOption {
                 type = lib.types.str;
                 default = "s-${name}";

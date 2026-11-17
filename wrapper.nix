@@ -31,6 +31,7 @@ let
           source
           target
           readOnly
+          when
           ;
       }) (lib.attrValues cfg.shares);
       network = cfg.network.enable;
