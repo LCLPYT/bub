@@ -238,6 +238,9 @@ bub.shares = {
 
   # no target: at the same path as on the host, e.g. for sibling repositories
   libs = { source = "~/src/shared-libs"; };
+  
+  # utils: mount whenever the host directory matches the given pattern; useful for sharing other projects e.g. for development
+  utils = { source = "~/src/go-utils", when = [ "~/src/*" ] };
 };
 ```
 
